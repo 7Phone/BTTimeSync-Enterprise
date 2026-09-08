@@ -199,7 +199,11 @@ public sealed class BluetoothRfcommServer : IDisposable
                 System.Console.WriteLine(
                     $"CRC16   : 0x{packet.Crc16:X4}");
 
-                if (packet.Type == PacketType.RequestTime)
+                if (packet.Type == PacketType.Hello)
+                {
+                    await SendHelloAckAsync(socket);
+                }
+                else if (packet.Type == PacketType.RequestTime)
                 {
                     await SendTimeResponseAsync(socket);
                 }
@@ -215,6 +219,34 @@ public sealed class BluetoothRfcommServer : IDisposable
             System.Console.WriteLine(
                 $"异常信息：{ex.Message}");
         }
+    }
+
+    private static async Task SendHelloAckAsync(
+        StreamSocket socket)
+    {
+        var packet = new Packet
+        {
+            Version = 1,
+            Type = PacketType.HelloAck,
+            Payload = []
+        };
+
+        var packetData =
+            PacketWriter.Encode(packet);
+
+        using var writer =
+            new DataWriter(socket.OutputStream);
+
+        writer.WriteBytes(packetData);
+
+        await writer.StoreAsync();
+        await writer.FlushAsync();
+
+        System.Console.WriteLine();
+        System.Console.WriteLine(
+            "已发送 BTSP HelloAck！");
+        System.Console.WriteLine(
+            $"HEX：{BitConverter.ToString(packetData)}");
     }
 
     private static async Task SendTimeResponseAsync(
