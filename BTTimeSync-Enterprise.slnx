@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="src/BTTimeSync.Bluetooth/BTTimeSync.Bluetooth.csproj" />
+  <Project Path="src/BTTimeSync.Common/BTTimeSync.Common.csproj" />
+  <Project Path="src/BTTimeSync.Console/BTTimeSync.Console.csproj" />
+  <Project Path="src/BTTimeSync.Core/BTTimeSync.Core.csproj" />
+  <Project Path="src/BTTimeSync.Server/BTTimeSync.Server.csproj" Id="138902e6-3e7d-40a8-888c-22d111cecd93" />
+</Solution>
