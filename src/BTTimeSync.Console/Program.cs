@@ -145,7 +145,6 @@ internal class Program
                 System.Console.WriteLine(
                     $"HEX：{BitConverter.ToString(helloData)}");
 
-                // 接收 HelloAck
                 var helloAck =
                     await ReceivePacketAsync(reader);
 
@@ -175,7 +174,7 @@ internal class Program
                     "BTSP Hello 握手成功！");
 
                 // ============================================================
-                // v0.4.0 多次采样校时
+                // v0.5.0 NTP-style 四时间戳多次采样校时
                 // ============================================================
 
                 const int sampleCount = 10;
@@ -184,7 +183,9 @@ internal class Program
                 System.Console.WriteLine(
                     "========================================");
                 System.Console.WriteLine(
-                    $"BTTimeSync v0.4.0 多次采样校时");
+                    "BTTimeSync v0.5.0 多次采样校时");
+                System.Console.WriteLine(
+                    "NTP-style 四时间戳");
                 System.Console.WriteLine(
                     $"计划采样次数：{sampleCount}");
                 System.Console.WriteLine(
@@ -210,7 +211,7 @@ internal class Program
 
                         System.Console.WriteLine();
                         System.Console.WriteLine(
-                            $"本次采样结果：RTT = " +
+                            $"本次采样结果：Delay = " +
                             $"{syncResult.RoundTripMilliseconds:F1} ms，" +
                             $"时间偏差 = " +
                             $"{syncResult.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
@@ -225,17 +226,11 @@ internal class Program
                             $"原因：{syncResult.ErrorMessage}");
                     }
 
-                    // 两次采样之间稍微间隔一下。
-                    // 注意：这里不会修改系统时间。
                     if (i < sampleCount)
                     {
                         await Task.Delay(100);
                     }
                 }
-
-                // ============================================================
-                // 检查是否至少有一次成功
-                // ============================================================
 
                 if (syncResults.Count == 0)
                 {
@@ -262,13 +257,13 @@ internal class Program
 
                     System.Console.WriteLine(
                         $"样本 {i + 1,2}：" +
-                        $"RTT = {resultItem.RoundTripMilliseconds,6:F1} ms，" +
+                        $"Delay = {resultItem.RoundTripMilliseconds,6:F1} ms，" +
                         $"偏差 = " +
                         $"{resultItem.OffsetMilliseconds,7:+0.0;-0.0;0.0} ms");
                 }
 
                 // ============================================================
-                // 选择 RTT 最小的样本
+                // 选择 Delay 最小的样本
                 // ============================================================
 
                 var bestResult =
@@ -292,7 +287,7 @@ internal class Program
                     $"最佳样本：第 {bestIndex} 次");
 
                 System.Console.WriteLine(
-                    $"最佳 RTT：" +
+                    $"最佳 Delay：" +
                     $" {bestResult.RoundTripMilliseconds:F1} ms");
 
                 System.Console.WriteLine(
@@ -375,12 +370,12 @@ internal class Program
                 if (remainingError <= 50)
                 {
                     System.Console.WriteLine(
-                        "BTTimeSync v0.4.0 校时成功！");
+                        "BTTimeSync v0.5.0 校时成功！");
                 }
                 else
                 {
                     System.Console.WriteLine(
-                        "BTTimeSync v0.4.0 校时完成，" +
+                        "BTTimeSync v0.5.0 校时完成，" +
                         "但剩余误差超过 50 ms。");
                 }
 
@@ -428,8 +423,20 @@ internal class Program
     // ========================================================================
     // 单次校时
     //
-    // v0.4.0 的核心：
-    // 这个方法只负责“测量一次”，不负责修改系统时间。
+    // v0.5.0：NTP-style 四时间戳
+    //
+    // T1：客户端发送 TimeRequest
+    // T2：服务器收到 TimeRequest
+    // T3：服务器发送 TimeResponse
+    // T4：客户端收到 TimeResponse
+    //
+    // Delay  = (T4 - T1) - (T3 - T2)
+    // Offset = ((T2 - T1) + (T3 - T4)) / 2
+    //
+    // Offset > 0：
+    //     服务器时间领先客户端
+    //
+    // 本方法只负责“测量一次”，不负责修改系统时间。
     // ========================================================================
 
     private static async Task<SyncResult> SyncOnceAsync(
@@ -439,31 +446,38 @@ internal class Program
         try
         {
             // ------------------------------------------------------------
-            // 记录发送前的本地 UTC
+            // T1：客户端发送 TimeRequest 前记录 UTC 时间
             // ------------------------------------------------------------
 
-            var localTimeBefore =
-                DateTimeOffset.UtcNow;
-
-            var localUnixMillisecondsBefore =
-                localTimeBefore.ToUnixTimeMilliseconds();
+            var t1 =
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
             // ------------------------------------------------------------
-            // 创建 RequestTime
+            // 创建 TimeRequest
+            //
+            // Payload：
+            // T1 = 8 字节，大端序
             // ------------------------------------------------------------
+
+            var requestPayload = new byte[8];
+
+            System.Buffers.Binary.BinaryPrimitives
+                .WriteInt64BigEndian(
+                    requestPayload,
+                    t1);
 
             var requestPacket = new Packet
             {
                 Version = 1,
                 Type = PacketType.RequestTime,
-                Payload = []
+                Payload = requestPayload
             };
 
             var requestData =
                 PacketWriter.Encode(requestPacket);
 
             // ------------------------------------------------------------
-            // 发送 RequestTime
+            // 发送 TimeRequest
             // ------------------------------------------------------------
 
             writer.WriteBytes(requestData);
@@ -475,6 +489,8 @@ internal class Program
             System.Console.WriteLine(
                 "已发送 BTSP RequestTime！");
             System.Console.WriteLine(
+                $"T1 客户端发送：{t1}");
+            System.Console.WriteLine(
                 $"HEX：{BitConverter.ToString(requestData)}");
 
             // ------------------------------------------------------------
@@ -484,9 +500,12 @@ internal class Program
             var response =
                 await ReceivePacketAsync(reader);
 
-            // 收到完整响应后的本地时间
-            var localTimeAfter =
-                DateTimeOffset.UtcNow;
+            // ------------------------------------------------------------
+            // T4：客户端收到 TimeResponse 后记录
+            // ------------------------------------------------------------
+
+            var t4 =
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
             // ------------------------------------------------------------
             // 显示 TimeResponse
@@ -502,78 +521,155 @@ internal class Program
             System.Console.WriteLine(
                 $"Length  : {response.Length}");
             System.Console.WriteLine(
+                $"Payload : {BitConverter.ToString(response.Payload)}");
+            System.Console.WriteLine(
                 $"CRC16   : 0x{response.Crc16:X4}");
 
             // ------------------------------------------------------------
             // 验证响应
+            //
+            // v0.5.0 TimeResponse Payload：
+            //
+            // T1 = 8 字节
+            // T2 = 8 字节
+            // T3 = 8 字节
+            //
+            // 共 24 字节
             // ------------------------------------------------------------
 
             if (response.Type != PacketType.TimeResponse ||
-                response.Payload.Length != 8)
+                response.Payload.Length != 24)
             {
                 throw new InvalidOperationException(
-                    "收到的 TimeResponse 数据格式错误。");
+                    "收到的 TimeResponse 数据格式错误，" +
+                    "Payload 应为 24 字节 T1/T2/T3。");
             }
 
             // ------------------------------------------------------------
-            // 读取远端 Unix 时间
+            // 解析 T1
             // ------------------------------------------------------------
 
-            var remoteUnixMilliseconds =
+            var t1FromServer =
                 System.Buffers.Binary.BinaryPrimitives
                     .ReadInt64BigEndian(
-                        response.Payload);
+                        response.Payload.AsSpan(0, 8));
+
+            // ------------------------------------------------------------
+            // 解析 T2
+            // ------------------------------------------------------------
+
+            var t2 =
+                System.Buffers.Binary.BinaryPrimitives
+                    .ReadInt64BigEndian(
+                        response.Payload.AsSpan(8, 8));
+
+            // ------------------------------------------------------------
+            // 解析 T3
+            // ------------------------------------------------------------
+
+            var t3 =
+                System.Buffers.Binary.BinaryPrimitives
+                    .ReadInt64BigEndian(
+                        response.Payload.AsSpan(16, 8));
+
+            // ------------------------------------------------------------
+            // 验证服务器返回的 T1
+            //
+            // 防止请求/响应错配。
+            // ------------------------------------------------------------
+
+            if (t1FromServer != t1)
+            {
+                throw new InvalidOperationException(
+                    $"TimeResponse 中的 T1 与本次请求不一致。" +
+                    $" 请求 T1={t1}，响应 T1={t1FromServer}。");
+            }
+
+            // ------------------------------------------------------------
+            // 创建四时间戳对象
+            // ------------------------------------------------------------
+
+            var timestamps =
+                new TimeSyncTimestamps
+                {
+                    T1 = t1,
+                    T2 = t2,
+                    T3 = t3,
+                    T4 = t4
+                };
+
+            // ------------------------------------------------------------
+            // 显示四个时间戳
+            // ------------------------------------------------------------
+
+            System.Console.WriteLine();
+            System.Console.WriteLine(
+                "NTP-style 四时间戳：");
+            System.Console.WriteLine(
+                $"T1 客户端发送：{timestamps.T1}");
+            System.Console.WriteLine(
+                $"T2 服务器接收：{timestamps.T2}");
+            System.Console.WriteLine(
+                $"T3 服务器发送：{timestamps.T3}");
+            System.Console.WriteLine(
+                $"T4 客户端接收：{timestamps.T4}");
+
+            // ------------------------------------------------------------
+            // 计算 Delay
+            //
+            // Delay = (T4 - T1) - (T3 - T2)
+            // ------------------------------------------------------------
+
+            var delayMilliseconds =
+                (timestamps.T4 - timestamps.T1) -
+                (timestamps.T3 - timestamps.T2);
+
+            // ------------------------------------------------------------
+            // 计算 Offset
+            //
+            // Offset = ((T2 - T1) + (T3 - T4)) / 2
+            //
+            // Offset > 0：
+            //     服务器时间领先客户端
+            // ------------------------------------------------------------
+
+            var offsetMilliseconds =
+                (
+                    (timestamps.T2 - timestamps.T1) +
+                    (timestamps.T3 - timestamps.T4)
+                ) / 2.0;
+
+            // ------------------------------------------------------------
+            // 防御异常情况
+            // ------------------------------------------------------------
+
+            if (delayMilliseconds < 0)
+            {
+                throw new InvalidOperationException(
+                    $"计算出的网络延迟异常：{delayMilliseconds} ms。");
+            }
+
+            // ------------------------------------------------------------
+            // 远端 UTC
+            //
+            // T3 是服务器发送 TimeResponse 时的 UTC。
+            // ------------------------------------------------------------
 
             var remoteTime =
                 DateTimeOffset
                     .FromUnixTimeMilliseconds(
-                        remoteUnixMilliseconds);
-
-            // ------------------------------------------------------------
-            // 本地结束时间
-            // ------------------------------------------------------------
-
-            var localUnixMillisecondsAfter =
-                localTimeAfter.ToUnixTimeMilliseconds();
-
-            // ------------------------------------------------------------
-            // RTT
-            // ------------------------------------------------------------
-
-            var roundTripMilliseconds =
-                localUnixMillisecondsAfter -
-                localUnixMillisecondsBefore;
-
-            // ------------------------------------------------------------
-            // 本地时间中点
-            //
-            // 假设上下行传输延迟大致对称，
-            // 用发送前和接收后的中点估算真正的本地对应时刻。
-            // ------------------------------------------------------------
-
-            var localMidpointMilliseconds =
-                (localUnixMillisecondsBefore +
-                 localUnixMillisecondsAfter) / 2.0;
-
-            // ------------------------------------------------------------
-            // 计算远端与本地的时间偏差
-            // ------------------------------------------------------------
-
-            var offsetMilliseconds =
-                remoteUnixMilliseconds -
-                localMidpointMilliseconds;
+                        t3);
 
             // ------------------------------------------------------------
             // 计算校时目标
             //
-            // 注意：
-            // 这里只计算目标时间，不修改系统时间。
-            // 真正修改系统时间是在 Main() 中，
-            // 10 次采样全部完成并选择最佳样本之后。
+            // 目标时间 = T4 对应的客户端时间 + Offset
+            //
+            // 这里仅计算目标时间，不修改系统时间。
             // ------------------------------------------------------------
 
             var targetUnixMilliseconds =
-                localUnixMillisecondsAfter +
+                t4 +
                 (long)Math.Round(
                     offsetMilliseconds);
 
@@ -581,6 +677,16 @@ internal class Program
                 DateTimeOffset
                     .FromUnixTimeMilliseconds(
                         targetUnixMilliseconds);
+
+            // ------------------------------------------------------------
+            // 显示计算结果
+            // ------------------------------------------------------------
+
+            System.Console.WriteLine();
+            System.Console.WriteLine(
+                $"网络 Delay：{delayMilliseconds:F1} ms");
+            System.Console.WriteLine(
+                $"时间 Offset：{offsetMilliseconds:+0.0;-0.0;0.0} ms");
 
             // ------------------------------------------------------------
             // 返回本次采样结果
@@ -591,13 +697,13 @@ internal class Program
                 Success = true,
 
                 RoundTripMilliseconds =
-                    roundTripMilliseconds,
+                    delayMilliseconds,
 
                 OffsetMilliseconds =
                     offsetMilliseconds,
 
                 RemoteUnixMilliseconds =
-                    remoteUnixMilliseconds,
+                    t3,
 
                 RemoteTime =
                     remoteTime,

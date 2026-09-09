@@ -205,7 +205,9 @@ public sealed class BluetoothRfcommServer : IDisposable
                 }
                 else if (packet.Type == PacketType.RequestTime)
                 {
-                    await SendTimeResponseAsync(socket);
+                    await SendTimeResponseAsync(
+                        socket,
+                        packet.Payload);
                 }
             }
         }
@@ -252,17 +254,53 @@ public sealed class BluetoothRfcommServer : IDisposable
     }
 
     private static async Task SendTimeResponseAsync(
-        StreamSocket socket)
+        StreamSocket socket,
+        byte[] requestPayload)
     {
-        var unixMilliseconds =
+        // v0.5.0：
+        // RequestTime Payload 必须包含客户端 T1。
+        if (requestPayload.Length != 8)
+        {
+            throw new InvalidOperationException(
+                "TimeRequest Payload 长度错误，应为 8 字节 T1。");
+        }
+
+        // T1：客户端发送 TimeRequest 的时间戳。
+        var t1 =
+            System.Buffers.Binary.BinaryPrimitives
+                .ReadInt64BigEndian(requestPayload);
+
+        // T2：服务器收到 TimeRequest 后立即记录。
+        var t2 =
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        var payload = new byte[8];
+        // T3：服务器准备发送 TimeResponse 前记录。
+        var t3 =
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // TimeResponse Payload：
+        //
+        // T1：Client Send
+        // T2：Server Receive
+        // T3：Server Send
+        //
+        // 共 24 字节。
+        var payload = new byte[24];
 
         System.Buffers.Binary.BinaryPrimitives
             .WriteInt64BigEndian(
-                payload,
-                unixMilliseconds);
+                payload.AsSpan(0, 8),
+                t1);
+
+        System.Buffers.Binary.BinaryPrimitives
+            .WriteInt64BigEndian(
+                payload.AsSpan(8, 8),
+                t2);
+
+        System.Buffers.Binary.BinaryPrimitives
+            .WriteInt64BigEndian(
+                payload.AsSpan(16, 8),
+                t3);
 
         var packet = new Packet
         {
@@ -288,9 +326,13 @@ public sealed class BluetoothRfcommServer : IDisposable
         System.Console.WriteLine(
             "已发送 BTSP TimeResponse！");
         System.Console.WriteLine(
-            $"UTC时间：{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff}");
+            $"T1 客户端发送：{t1}");
         System.Console.WriteLine(
-            $"Unix毫秒：{unixMilliseconds}");
+            $"T2 服务器接收：{t2}");
+        System.Console.WriteLine(
+            $"T3 服务器发送：{t3}");
+        System.Console.WriteLine(
+            $"服务器处理耗时：{t3 - t2} ms");
         System.Console.WriteLine(
             $"HEX：{BitConverter.ToString(packetData)}");
     }
