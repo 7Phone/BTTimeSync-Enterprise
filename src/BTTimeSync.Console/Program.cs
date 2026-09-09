@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Runtime.InteropServices;
 using BTTimeSync.Common;
+using BTTimeSync.Core;
 using BTTimeSync.Core.Protocol;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Rfcomm;
@@ -174,7 +175,15 @@ internal class Program
                     "BTSP Hello 握手成功！");
 
                 // ============================================================
-                // v0.5.0 NTP-style 四时间戳多次采样校时
+                // v0.6.1
+                // NTP-style 四时间戳 + Median / MAD 异常值检测
+                //
+                // v0.6.1 相比 v0.6.0：
+                // 1. SyncResult 保存 T1/T2/T3/T4
+                // 2. 最终校时目标明确使用：
+                //       T4 + FinalOffset
+                // 3. 校时后的误差验证也使用：
+                //       实际时间 - (T4 + FinalOffset)
                 // ============================================================
 
                 const int sampleCount = 10;
@@ -183,9 +192,13 @@ internal class Program
                 System.Console.WriteLine(
                     "========================================");
                 System.Console.WriteLine(
-                    "BTTimeSync v0.5.0 多次采样校时");
+                    "BTTimeSync v0.6.1 多次采样校时");
                 System.Console.WriteLine(
                     "NTP-style 四时间戳");
+                System.Console.WriteLine(
+                    "Median / MAD 异常值检测");
+                System.Console.WriteLine(
+                    "校时后误差验证修正");
                 System.Console.WriteLine(
                     $"计划采样次数：{sampleCount}");
                 System.Console.WriteLine(
@@ -263,44 +276,250 @@ internal class Program
                 }
 
                 // ============================================================
-                // 选择 Delay 最小的样本
+                // 找出 Delay 最小的样本
+                //
+                // 保留该结果用于与 v0.5.0 对比。
+                // v0.6.1 实际校时仍然使用统计得到的 FinalOffset。
                 // ============================================================
 
-                var bestResult =
+                var bestDelayResult =
                     syncResults
                         .OrderBy(x =>
                             x.RoundTripMilliseconds)
                         .First();
 
-                var bestIndex =
-                    syncResults.IndexOf(bestResult) + 1;
+                var bestDelayIndex =
+                    syncResults.IndexOf(bestDelayResult) + 1;
+
+                // ============================================================
+                // v0.6.1 Median / MAD 统计分析
+                // ============================================================
+
+                var offsets =
+                    syncResults
+                        .Select(x =>
+                            x.OffsetMilliseconds)
+                        .ToArray();
+
+                var statistics =
+                    TimeSyncStatistics.Analyze(
+                        offsets);
 
                 System.Console.WriteLine();
                 System.Console.WriteLine(
                     "========================================");
                 System.Console.WriteLine(
-                    "             最佳样本");
+                    "          v0.6.1 统计分析");
                 System.Console.WriteLine(
                     "========================================");
 
                 System.Console.WriteLine(
-                    $"最佳样本：第 {bestIndex} 次");
+                    $"原始有效样本：{syncResults.Count}");
+
+                System.Console.WriteLine(
+                    $"Offset Median：" +
+                    $" {statistics.Median:+0.00;-0.00;0.00} ms");
+
+                System.Console.WriteLine(
+                    $"MAD：" +
+                    $" {statistics.Mad:F2} ms");
+
+                if (statistics.Mad > double.Epsilon)
+                {
+                    System.Console.WriteLine(
+                        $"异常判断阈值：" +
+                        $" ±{statistics.Threshold:F2} ms");
+                }
+                else
+                {
+                    System.Console.WriteLine(
+                        "异常判断阈值：无（MAD 接近 0）");
+                }
+
+                System.Console.WriteLine(
+                    $"正常样本：" +
+                    $" {statistics.ValidIndexes.Count}");
+
+                System.Console.WriteLine(
+                    $"异常样本：" +
+                    $" {statistics.OutlierIndexes.Count}");
+
+                // ============================================================
+                // 输出异常样本
+                // ============================================================
+
+                if (statistics.OutlierIndexes.Count > 0)
+                {
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "异常样本：");
+
+                    foreach (var index in statistics.OutlierIndexes)
+                    {
+                        var resultItem =
+                            syncResults[index];
+
+                        System.Console.WriteLine(
+                            $"第 {index + 1} 次：" +
+                            $" Delay = " +
+                            $"{resultItem.RoundTripMilliseconds:F1} ms，" +
+                            $" Offset = " +
+                            $"{resultItem.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
+                    }
+                }
+                else
+                {
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "未检测到异常样本。");
+                }
+
+                // ============================================================
+                // 输出正常样本
+                // ============================================================
+
+                System.Console.WriteLine();
+                System.Console.WriteLine(
+                    "正常样本：");
+
+                foreach (var index in statistics.ValidIndexes)
+                {
+                    var resultItem =
+                        syncResults[index];
+
+                    System.Console.WriteLine(
+                        $"第 {index + 1} 次：" +
+                        $" Delay = " +
+                        $"{resultItem.RoundTripMilliseconds:F1} ms，" +
+                        $" Offset = " +
+                        $"{resultItem.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
+                }
+
+                // ============================================================
+                // 最终校时结果
+                // ============================================================
+
+                var finalOffset =
+                    statistics.FinalOffset;
+
+                System.Console.WriteLine();
+                System.Console.WriteLine(
+                    "========================================");
+                System.Console.WriteLine(
+                    "             校时结果对比");
+                System.Console.WriteLine(
+                    "========================================");
+
+                System.Console.WriteLine(
+                    $"最佳 Delay 样本：第 {bestDelayIndex} 次");
 
                 System.Console.WriteLine(
                     $"最佳 Delay：" +
-                    $" {bestResult.RoundTripMilliseconds:F1} ms");
+                    $" {bestDelayResult.RoundTripMilliseconds:F1} ms");
 
                 System.Console.WriteLine(
-                    $"时间偏差：" +
-                    $" {bestResult.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
+                    $"最佳 Delay 样本 Offset：" +
+                    $" {bestDelayResult.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
 
                 System.Console.WriteLine(
-                    $"远端 UTC：" +
-                    $" {bestResult.RemoteTime:yyyy-MM-dd HH:mm:ss.fff}");
+                    $"Median：" +
+                    $" {statistics.Median:+0.00;-0.00;0.00} ms");
 
                 System.Console.WriteLine(
-                    $"校时目标 UTC：" +
-                    $" {bestResult.TargetTime:yyyy-MM-dd HH:mm:ss.fff}");
+                    $"最终 Offset：" +
+                    $" {finalOffset:+0.00;-0.00;0.00} ms");
+
+                // ============================================================
+                // 选择最终校时参考样本
+                //
+                // 只从正常样本中选择 Delay 最小的样本。
+                //
+                // 注意：
+                // 参考样本只提供 T4；
+                // 真正的 Offset 使用 statistics.FinalOffset。
+                // ============================================================
+
+                var validResults =
+                    statistics.ValidIndexes
+                        .Select(index => new
+                        {
+                            Index = index,
+                            Result = syncResults[index]
+                        })
+                        .ToList();
+
+                if (validResults.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "异常值剔除后没有可用样本，无法进行校时。");
+                }
+
+                var referenceSample =
+                    validResults
+                        .OrderBy(x =>
+                            x.Result.RoundTripMilliseconds)
+                        .First();
+
+                var referenceIndex =
+                    referenceSample.Index + 1;
+
+                var referenceResult =
+                    referenceSample.Result;
+
+                // ============================================================
+                // v0.6.1 最终校时目标
+                //
+                // 正确公式：
+                //
+                //     Target = T4 + FinalOffset
+                //
+                // T4：
+                //     客户端收到服务器 TimeResponse 的本地 UTC
+                //
+                // FinalOffset：
+                //     Median/MAD 统计得到的最终时钟偏差
+                // ============================================================
+
+                var targetUnixMilliseconds =
+                    referenceResult.T4 +
+                    (long)Math.Round(
+                        finalOffset);
+
+                var finalTargetTime =
+                    DateTimeOffset
+                        .FromUnixTimeMilliseconds(
+                            targetUnixMilliseconds);
+
+                System.Console.WriteLine();
+                System.Console.WriteLine(
+                    "========================================");
+                System.Console.WriteLine(
+                    "             最终校时");
+                System.Console.WriteLine(
+                    "========================================");
+
+                System.Console.WriteLine(
+                    $"参考样本：第 {referenceIndex} 次");
+
+                System.Console.WriteLine(
+                    $"参考 Delay：" +
+                    $" {referenceResult.RoundTripMilliseconds:F1} ms");
+
+                System.Console.WriteLine(
+                    $"参考样本 T4：" +
+                    $" {referenceResult.T4}");
+
+                System.Console.WriteLine(
+                    $"参考样本远端 UTC：" +
+                    $" {referenceResult.RemoteTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+                System.Console.WriteLine(
+                    $"最终校时 Offset：" +
+                    $" {finalOffset:+0.00;-0.00;0.00} ms");
+
+                System.Console.WriteLine(
+                    $"最终校时目标 UTC：" +
+                    $" {finalTargetTime:yyyy-MM-dd HH:mm:ss.fff}");
 
                 // ============================================================
                 // 只在这里设置一次 Windows 系统时间
@@ -311,7 +530,7 @@ internal class Program
                     "正在设置内网机系统时间...");
 
                 var targetTime =
-                    bestResult.TargetTime;
+                    finalTargetTime;
 
                 var systemTime = new SYSTEMTIME
                 {
@@ -343,24 +562,48 @@ internal class Program
                     "系统时间设置成功！");
 
                 // ============================================================
-                // 校时后验证
+                // v0.6.1 校时后验证
+                //
+                // 旧版错误公式：
+                //
+                //     CorrectedTime - RemoteTime - FinalOffset
+                //
+                // RemoteTime 是 T3，而校时目标是从 T4 出发计算的，
+                // 因此两者不能直接这样比较。
+                //
+                // 正确验证：
+                //
+                //     理论校正时间 = T4 + FinalOffset
+                //
+                //     剩余误差 =
+                //         |实际系统时间 - 理论校正时间|
                 // ============================================================
 
                 var correctedTime =
                     DateTimeOffset.UtcNow;
 
+                var theoreticalCorrectedTime =
+                    DateTimeOffset
+                        .FromUnixTimeMilliseconds(
+                            targetUnixMilliseconds);
+
                 var remainingError =
                     Math.Abs(
-                        (correctedTime -
-                         bestResult.RemoteTime)
-                        .TotalMilliseconds);
+                        (
+                            correctedTime -
+                            theoreticalCorrectedTime
+                        ).TotalMilliseconds);
 
                 System.Console.WriteLine(
                     $"校时后 UTC：" +
                     $" {correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
 
                 System.Console.WriteLine(
-                    $"校时后剩余误差：" +
+                    $"理论校正 UTC：" +
+                    $" {theoreticalCorrectedTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+                System.Console.WriteLine(
+                    $"校时后相对理论目标的剩余误差：" +
                     $" {remainingError:F0} ms");
 
                 System.Console.WriteLine();
@@ -370,12 +613,12 @@ internal class Program
                 if (remainingError <= 50)
                 {
                     System.Console.WriteLine(
-                        "BTTimeSync v0.5.0 校时成功！");
+                        "BTTimeSync v0.6.1 校时成功！");
                 }
                 else
                 {
                     System.Console.WriteLine(
-                        "BTTimeSync v0.5.0 校时完成，" +
+                        "BTTimeSync v0.6.1 校时完成，" +
                         "但剩余误差超过 50 ms。");
                 }
 
@@ -423,7 +666,7 @@ internal class Program
     // ========================================================================
     // 单次校时
     //
-    // v0.5.0：NTP-style 四时间戳
+    // NTP-style 四时间戳
     //
     // T1：客户端发送 TimeRequest
     // T2：服务器收到 TimeRequest
@@ -436,7 +679,7 @@ internal class Program
     // Offset > 0：
     //     服务器时间领先客户端
     //
-    // 本方法只负责“测量一次”，不负责修改系统时间。
+    // 本方法只负责测量一次，不负责修改系统时间。
     // ========================================================================
 
     private static async Task<SyncResult> SyncOnceAsync(
@@ -501,7 +744,7 @@ internal class Program
                 await ReceivePacketAsync(reader);
 
             // ------------------------------------------------------------
-            // T4：客户端收到 TimeResponse 后记录
+            // T4：客户端收到 TimeResponse 后立即记录
             // ------------------------------------------------------------
 
             var t4 =
@@ -528,7 +771,7 @@ internal class Program
             // ------------------------------------------------------------
             // 验证响应
             //
-            // v0.5.0 TimeResponse Payload：
+            // TimeResponse Payload：
             //
             // T1 = 8 字节
             // T2 = 8 字节
@@ -546,7 +789,7 @@ internal class Program
             }
 
             // ------------------------------------------------------------
-            // 解析 T1
+            // 解析服务器返回的 T1
             // ------------------------------------------------------------
 
             var t1FromServer =
@@ -574,8 +817,6 @@ internal class Program
 
             // ------------------------------------------------------------
             // 验证服务器返回的 T1
-            //
-            // 防止请求/响应错配。
             // ------------------------------------------------------------
 
             if (t1FromServer != t1)
@@ -628,9 +869,6 @@ internal class Program
             // 计算 Offset
             //
             // Offset = ((T2 - T1) + (T3 - T4)) / 2
-            //
-            // Offset > 0：
-            //     服务器时间领先客户端
             // ------------------------------------------------------------
 
             var offsetMilliseconds =
@@ -661,11 +899,12 @@ internal class Program
                         t3);
 
             // ------------------------------------------------------------
-            // 计算校时目标
+            // 本次样本的目标时间
             //
-            // 目标时间 = T4 对应的客户端时间 + Offset
+            // Target = T4 + Offset
             //
-            // 这里仅计算目标时间，不修改系统时间。
+            // 这里只用于保存当前样本的理论目标。
+            // 最终校时仍使用统计得到的 FinalOffset。
             // ------------------------------------------------------------
 
             var targetUnixMilliseconds =
@@ -690,6 +929,9 @@ internal class Program
 
             // ------------------------------------------------------------
             // 返回本次采样结果
+            //
+            // v0.6.1：同时保存 T1/T2/T3/T4，
+            // 供最终校时和误差验证使用。
             // ------------------------------------------------------------
 
             return new SyncResult
@@ -709,7 +951,12 @@ internal class Program
                     remoteTime,
 
                 TargetTime =
-                    targetTime
+                    targetTime,
+
+                T1 = t1,
+                T2 = t2,
+                T3 = t3,
+                T4 = t4
             };
         }
         catch (Exception ex)
