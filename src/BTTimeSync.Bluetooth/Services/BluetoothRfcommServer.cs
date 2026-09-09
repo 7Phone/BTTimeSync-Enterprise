@@ -242,6 +242,8 @@ public sealed class BluetoothRfcommServer : IDisposable
         await writer.StoreAsync();
         await writer.FlushAsync();
 
+        writer.DetachStream();
+
         System.Console.WriteLine();
         System.Console.WriteLine(
             "已发送 BTSP HelloAck！");
@@ -279,6 +281,8 @@ public sealed class BluetoothRfcommServer : IDisposable
 
         await writer.StoreAsync();
         await writer.FlushAsync();
+
+        writer.DetachStream();
 
         System.Console.WriteLine();
         System.Console.WriteLine(

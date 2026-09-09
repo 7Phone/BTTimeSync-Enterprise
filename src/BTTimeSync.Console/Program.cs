@@ -107,6 +107,76 @@ internal class Program
                 System.Console.WriteLine(
                     "RFCOMM 连接成功！");
 
+                using var writer =
+                    new DataWriter(socket.OutputStream);
+
+                using var reader =
+                    new DataReader(socket.InputStream);
+
+                reader.InputStreamOptions =
+                    InputStreamOptions.Partial;
+
+                // ====================================================
+                // BTSP Hello 握手
+                // ====================================================
+
+                var helloPayload =
+                    System.Text.Encoding.UTF8.GetBytes(
+                        AppConstants.BluetoothServiceName);
+
+                var helloPacket = new Packet
+                {
+                    Version = 1,
+                    Type = PacketType.Hello,
+                    Payload = helloPayload
+                };
+
+                var helloData =
+                    PacketWriter.Encode(helloPacket);
+
+                writer.WriteBytes(helloData);
+
+                await writer.StoreAsync();
+                await writer.FlushAsync();
+
+                System.Console.WriteLine();
+                System.Console.WriteLine(
+                    "已发送 BTSP Hello！");
+                System.Console.WriteLine(
+                    $"HEX：{BitConverter.ToString(helloData)}");
+
+                // ====================================================
+                // 接收 HelloAck
+                // ====================================================
+
+                var helloAck =
+                    await ReceivePacketAsync(reader);
+
+                System.Console.WriteLine();
+                System.Console.WriteLine(
+                    "收到 BTSP HelloAck！");
+                System.Console.WriteLine(
+                    $"Version : {helloAck.Version}");
+                System.Console.WriteLine(
+                    $"Type    : {helloAck.Type}");
+                System.Console.WriteLine(
+                    $"Length  : {helloAck.Length}");
+                System.Console.WriteLine(
+                    $"Payload : {BitConverter.ToString(helloAck.Payload)}");
+                System.Console.WriteLine(
+                    $"CRC16   : 0x{helloAck.Crc16:X4}");
+
+                if (helloAck.Type != PacketType.HelloAck ||
+                    helloAck.Payload.Length != 0)
+                {
+                    throw new InvalidOperationException(
+                        "收到的 HelloAck 数据格式错误。");
+                }
+
+                System.Console.WriteLine();
+                System.Console.WriteLine(
+                    "BTSP Hello 握手成功！");
+
                 // ====================================================
                 // 记录内网机发送前时间
                 // ====================================================
@@ -131,9 +201,6 @@ internal class Program
                 var requestData =
                     PacketWriter.Encode(requestPacket);
 
-                using var writer =
-                    new DataWriter(socket.OutputStream);
-
                 writer.WriteBytes(requestData);
 
                 await writer.StoreAsync();
@@ -149,55 +216,8 @@ internal class Program
                 // 接收 TimeResponse
                 // ====================================================
 
-                using var reader =
-                    new DataReader(socket.InputStream);
-
-                reader.InputStreamOptions =
-                    InputStreamOptions.Partial;
-
-                await LoadExactlyAsync(
-                    reader,
-                    6);
-
-                var header = new byte[6];
-
-                reader.ReadBytes(header);
-
-                var payloadLength =
-                    (header[4] << 8) |
-                    header[5];
-
-                var remainingLength =
-                    payloadLength + 2;
-
-                await LoadExactlyAsync(
-                    reader,
-                    (uint)remainingLength);
-
-                var remaining =
-                    new byte[remainingLength];
-
-                reader.ReadBytes(remaining);
-
-                var packetData =
-                    new byte[6 + remainingLength];
-
-                System.Buffer.BlockCopy(
-                    header,
-                    0,
-                    packetData,
-                    0,
-                    header.Length);
-
-                System.Buffer.BlockCopy(
-                    remaining,
-                    0,
-                    packetData,
-                    6,
-                    remaining.Length);
-
                 var response =
-                    PacketReader.Decode(packetData);
+                    await ReceivePacketAsync(reader);
 
                 // ====================================================
                 // 记录内网机收到响应后的时间
@@ -371,6 +391,53 @@ internal class Program
 
             System.Console.ReadKey();
         }
+    }
+
+    private static async Task<Packet> ReceivePacketAsync(
+        DataReader reader)
+    {
+        await LoadExactlyAsync(
+            reader,
+            6);
+
+        var header = new byte[6];
+
+        reader.ReadBytes(header);
+
+        var payloadLength =
+            (header[4] << 8) |
+            header[5];
+
+        var remainingLength =
+            payloadLength + 2;
+
+        await LoadExactlyAsync(
+            reader,
+            (uint)remainingLength);
+
+        var remaining =
+            new byte[remainingLength];
+
+        reader.ReadBytes(remaining);
+
+        var packetData =
+            new byte[6 + remainingLength];
+
+        System.Buffer.BlockCopy(
+            header,
+            0,
+            packetData,
+            0,
+            header.Length);
+
+        System.Buffer.BlockCopy(
+            remaining,
+            0,
+            packetData,
+            6,
+            remaining.Length);
+
+        return PacketReader.Decode(packetData);
     }
 
     private static async Task LoadExactlyAsync(
