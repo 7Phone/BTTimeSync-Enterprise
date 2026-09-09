@@ -1,18 +1,31 @@
-﻿using System.ComponentModel;
-using System.Runtime.InteropServices;
-using BTTimeSync.Common;
+﻿using BTTimeSync.Common;
 using BTTimeSync.Core;
 using BTTimeSync.Core.Protocol;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Text;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Rfcomm;
 using Windows.Devices.Enumeration;
 using Windows.Networking.Sockets;
 using Windows.Storage.Streams;
 
-namespace BTTimeSync.Console;
-
 internal class Program
 {
+    private const int SampleCount = 10;
+    private const int SampleIntervalMilliseconds = 100;
+
+    private const int SyncIntervalMinutes = 30;
+
+    private const double VerificationThresholdMilliseconds = 50.0;
+
+    private const int ReconnectRetryIntervalSeconds = 5;
+    private const int ReconnectRetryIntervalMaximumSeconds = 30;
+
+    private static volatile bool _shutdownRequested;
+
     [StructLayout(LayoutKind.Sequential)]
     private struct SYSTEMTIME
     {
@@ -27,1056 +40,1100 @@ internal class Program
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool SetSystemTime(
-        ref SYSTEMTIME lpSystemTime);
+    private static extern bool SetSystemTime(ref SYSTEMTIME st);
 
-    static async Task Main(string[] args)
+    private static async Task Main()
     {
-        System.Console.WriteLine("BTTimeSync RFCOMM Client");
-        System.Console.WriteLine("========================");
-        System.Console.WriteLine();
+        Console.OutputEncoding = Encoding.UTF8;
 
-        System.Console.WriteLine(
-            $"目标服务 UUID：{AppConstants.BluetoothServiceUuid}");
+        Console.WriteLine("BTTimeSync v0.7.1");
+        Console.WriteLine("================");
+        Console.WriteLine();
 
-        System.Console.WriteLine();
+        Console.CancelKeyPress += OnCancelKeyPress;
+
+        ConnectionContext? connection = null;
 
         try
         {
-            var selector =
-                BluetoothDevice.GetDeviceSelector();
+            connection = await ConnectAndHandshakeAsync();
 
-            var devices =
-                await DeviceInformation.FindAllAsync(selector);
-
-            System.Console.WriteLine(
-                $"发现蓝牙设备：{devices.Count} 个");
-
-            System.Console.WriteLine();
-
-            foreach (var device in devices)
+            while (!_shutdownRequested)
             {
-                System.Console.WriteLine(
-                    $"设备：{device.Name}");
-
-                using var bluetoothDevice =
-                    await BluetoothDevice.FromIdAsync(
-                        device.Id);
-
-                if (bluetoothDevice is null)
+                if (!IsConnectionUsable(connection))
                 {
+                    DisposeConnection(connection);
+                    connection = await ReconnectAsync();
+
+                    if (_shutdownRequested)
+                        break;
+                }
+
+                var syncResult =
+                    await RunSyncCycleAsync(connection);
+
+                if (_shutdownRequested)
+                    break;
+
+                if (syncResult.ConnectionLost)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("检测到蓝牙连接断开。");
+                    Console.WriteLine("准备自动重新连接...");
+
+                    DisposeConnection(connection);
+                    connection = await ReconnectAsync();
+
+                    if (_shutdownRequested)
+                        break;
+
                     continue;
                 }
 
-                System.Console.WriteLine(
-                    "正在查询 BTTimeSync RFCOMM 服务...");
+                await WaitForNextSyncAsync(
+                    TimeSpan.FromMinutes(SyncIntervalMinutes));
+            }
+        }
+        catch (OperationCanceledException)
+            when (_shutdownRequested)
+        {
+            Console.WriteLine();
+            Console.WriteLine("收到退出请求。");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine();
+            Console.WriteLine("程序发生未处理异常：");
+            Console.WriteLine(ex);
+        }
+        finally
+        {
+            DisposeConnection(connection);
 
-                var result =
+            Console.WriteLine();
+            Console.WriteLine("BTTimeSync 已退出。");
+        }
+    }
+
+    private static void OnCancelKeyPress(
+        object? sender,
+        ConsoleCancelEventArgs e)
+    {
+        e.Cancel = true;
+        _shutdownRequested = true;
+
+        Console.WriteLine();
+        Console.WriteLine("正在退出 BTTimeSync...");
+    }
+
+    private static async Task<ConnectionContext>
+        ConnectAndHandshakeAsync()
+    {
+        while (!_shutdownRequested)
+        {
+            try
+            {
+                return await ConnectAndHandshakeOnceAsync();
+            }
+            catch (Exception ex)
+                when (IsConnectionException(ex))
+            {
+                Console.WriteLine();
+                Console.WriteLine($"连接失败：{ex.Message}");
+
+                if (_shutdownRequested)
+                    break;
+
+                Console.WriteLine(
+                    $"将在 {ReconnectRetryIntervalSeconds} 秒后重试...");
+
+                await DelayWithShutdownAsync(
+                    TimeSpan.FromSeconds(
+                        ReconnectRetryIntervalSeconds));
+            }
+        }
+
+        throw new OperationCanceledException();
+    }
+
+    private static async Task<ConnectionContext>
+        ConnectAndHandshakeOnceAsync()
+    {
+        Console.WriteLine("正在搜索 BTTimeSync 蓝牙设备...");
+
+        var selector =
+            BluetoothDevice.GetDeviceSelector();
+
+        var devices =
+            await DeviceInformation.FindAllAsync(selector);
+
+        BluetoothDevice? targetDevice = null;
+        RfcommDeviceService? targetService = null;
+
+        foreach (var deviceInformation in devices)
+        {
+            if (_shutdownRequested)
+                throw new OperationCanceledException();
+
+            BluetoothDevice? bluetoothDevice = null;
+
+            try
+            {
+                bluetoothDevice =
+                    await BluetoothDevice.FromIdAsync(
+                        deviceInformation.Id);
+
+                if (bluetoothDevice is null)
+                    continue;
+
+                var deviceName =
+                    bluetoothDevice.Name;
+
+                if (string.IsNullOrWhiteSpace(deviceName))
+                    deviceName = deviceInformation.Name;
+
+                Console.WriteLine(
+                    $"发现设备：{deviceName}");
+
+                var services =
                     await bluetoothDevice
                         .GetRfcommServicesForIdAsync(
                             RfcommServiceId.FromUuid(
-                                AppConstants.BluetoothServiceUuid),
-                            BluetoothCacheMode.Uncached);
+                                AppConstants.BluetoothServiceUuid));
 
-                System.Console.WriteLine(
-                    $"匹配服务数量：{result.Services.Count}");
-
-                var service =
-                    result.Services.FirstOrDefault();
-
-                if (service is null)
-                {
+                if (services.Services.Count == 0)
                     continue;
-                }
 
-                System.Console.WriteLine(
-                    $"服务 UUID：{service.ServiceId.Uuid}");
+                targetDevice = bluetoothDevice;
+                targetService = services.Services[0];
 
-                System.Console.WriteLine(
-                    "正在建立 RFCOMM 连接...");
+                Console.WriteLine(
+                    "发现 BTTimeSync RFCOMM 服务。");
 
-                using var socket =
-                    new StreamSocket();
-
-                await socket.ConnectAsync(
-                    service.ConnectionHostName,
-                    service.ConnectionServiceName,
-                    SocketProtectionLevel
-                        .BluetoothEncryptionAllowNullAuthentication);
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "RFCOMM 连接成功！");
-
-                using var writer =
-                    new DataWriter(socket.OutputStream);
-
-                using var reader =
-                    new DataReader(socket.InputStream);
-
-                reader.InputStreamOptions =
-                    InputStreamOptions.Partial;
-
-                // ============================================================
-                // BTSP Hello 握手
-                // ============================================================
-
-                var helloPayload =
-                    System.Text.Encoding.UTF8.GetBytes(
-                        AppConstants.BluetoothServiceName);
-
-                var helloPacket = new Packet
-                {
-                    Version = 1,
-                    Type = PacketType.Hello,
-                    Payload = helloPayload
-                };
-
-                var helloData =
-                    PacketWriter.Encode(helloPacket);
-
-                writer.WriteBytes(helloData);
-
-                await writer.StoreAsync();
-                await writer.FlushAsync();
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "已发送 BTSP Hello！");
-                System.Console.WriteLine(
-                    $"HEX：{BitConverter.ToString(helloData)}");
-
-                var helloAck =
-                    await ReceivePacketAsync(reader);
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "收到 BTSP HelloAck！");
-                System.Console.WriteLine(
-                    $"Version : {helloAck.Version}");
-                System.Console.WriteLine(
-                    $"Type    : {helloAck.Type}");
-                System.Console.WriteLine(
-                    $"Length  : {helloAck.Length}");
-                System.Console.WriteLine(
-                    $"Payload : {BitConverter.ToString(helloAck.Payload)}");
-                System.Console.WriteLine(
-                    $"CRC16   : 0x{helloAck.Crc16:X4}");
-
-                if (helloAck.Type != PacketType.HelloAck ||
-                    helloAck.Payload.Length != 0)
-                {
-                    throw new InvalidOperationException(
-                        "收到的 HelloAck 数据格式错误。");
-                }
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "BTSP Hello 握手成功！");
-
-                // ============================================================
-                // v0.6.1
-                // NTP-style 四时间戳 + Median / MAD 异常值检测
-                //
-                // v0.6.1 相比 v0.6.0：
-                // 1. SyncResult 保存 T1/T2/T3/T4
-                // 2. 最终校时目标明确使用：
-                //       T4 + FinalOffset
-                // 3. 校时后的误差验证也使用：
-                //       实际时间 - (T4 + FinalOffset)
-                // ============================================================
-
-                const int sampleCount = 10;
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "========================================");
-                System.Console.WriteLine(
-                    "BTTimeSync v0.6.1 多次采样校时");
-                System.Console.WriteLine(
-                    "NTP-style 四时间戳");
-                System.Console.WriteLine(
-                    "Median / MAD 异常值检测");
-                System.Console.WriteLine(
-                    "校时后误差验证修正");
-                System.Console.WriteLine(
-                    $"计划采样次数：{sampleCount}");
-                System.Console.WriteLine(
-                    "========================================");
-
-                var syncResults =
-                    new List<SyncResult>();
-
-                for (var i = 1; i <= sampleCount; i++)
-                {
-                    System.Console.WriteLine();
-                    System.Console.WriteLine(
-                        $"========== 第{i}次采样 ==========");
-
-                    var syncResult =
-                        await SyncOnceAsync(
-                            writer,
-                            reader);
-
-                    if (syncResult.Success)
-                    {
-                        syncResults.Add(syncResult);
-
-                        System.Console.WriteLine();
-                        System.Console.WriteLine(
-                            $"本次采样结果：Delay = " +
-                            $"{syncResult.RoundTripMilliseconds:F1} ms，" +
-                            $"时间偏差 = " +
-                            $"{syncResult.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
-                    }
-                    else
-                    {
-                        System.Console.WriteLine();
-                        System.Console.WriteLine(
-                            "本次采样失败！");
-
-                        System.Console.WriteLine(
-                            $"原因：{syncResult.ErrorMessage}");
-                    }
-
-                    if (i < sampleCount)
-                    {
-                        await Task.Delay(100);
-                    }
-                }
-
-                if (syncResults.Count == 0)
-                {
-                    throw new InvalidOperationException(
-                        "10 次采样全部失败，无法进行校时。");
-                }
-
-                // ============================================================
-                // 输出全部采样结果
-                // ============================================================
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "========================================");
-                System.Console.WriteLine(
-                    "           多次采样结果汇总");
-                System.Console.WriteLine(
-                    "========================================");
-
-                for (var i = 0; i < syncResults.Count; i++)
-                {
-                    var resultItem =
-                        syncResults[i];
-
-                    System.Console.WriteLine(
-                        $"样本 {i + 1,2}：" +
-                        $"Delay = {resultItem.RoundTripMilliseconds,6:F1} ms，" +
-                        $"偏差 = " +
-                        $"{resultItem.OffsetMilliseconds,7:+0.0;-0.0;0.0} ms");
-                }
-
-                // ============================================================
-                // 找出 Delay 最小的样本
-                //
-                // 保留该结果用于与 v0.5.0 对比。
-                // v0.6.1 实际校时仍然使用统计得到的 FinalOffset。
-                // ============================================================
-
-                var bestDelayResult =
-                    syncResults
-                        .OrderBy(x =>
-                            x.RoundTripMilliseconds)
-                        .First();
-
-                var bestDelayIndex =
-                    syncResults.IndexOf(bestDelayResult) + 1;
-
-                // ============================================================
-                // v0.6.1 Median / MAD 统计分析
-                // ============================================================
-
-                var offsets =
-                    syncResults
-                        .Select(x =>
-                            x.OffsetMilliseconds)
-                        .ToArray();
-
-                var statistics =
-                    TimeSyncStatistics.Analyze(
-                        offsets);
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "========================================");
-                System.Console.WriteLine(
-                    "          v0.6.1 统计分析");
-                System.Console.WriteLine(
-                    "========================================");
-
-                System.Console.WriteLine(
-                    $"原始有效样本：{syncResults.Count}");
-
-                System.Console.WriteLine(
-                    $"Offset Median：" +
-                    $" {statistics.Median:+0.00;-0.00;0.00} ms");
-
-                System.Console.WriteLine(
-                    $"MAD：" +
-                    $" {statistics.Mad:F2} ms");
-
-                if (statistics.Mad > double.Epsilon)
-                {
-                    System.Console.WriteLine(
-                        $"异常判断阈值：" +
-                        $" ±{statistics.Threshold:F2} ms");
-                }
-                else
-                {
-                    System.Console.WriteLine(
-                        "异常判断阈值：无（MAD 接近 0）");
-                }
-
-                System.Console.WriteLine(
-                    $"正常样本：" +
-                    $" {statistics.ValidIndexes.Count}");
-
-                System.Console.WriteLine(
-                    $"异常样本：" +
-                    $" {statistics.OutlierIndexes.Count}");
-
-                // ============================================================
-                // 输出异常样本
-                // ============================================================
-
-                if (statistics.OutlierIndexes.Count > 0)
-                {
-                    System.Console.WriteLine();
-                    System.Console.WriteLine(
-                        "异常样本：");
-
-                    foreach (var index in statistics.OutlierIndexes)
-                    {
-                        var resultItem =
-                            syncResults[index];
-
-                        System.Console.WriteLine(
-                            $"第 {index + 1} 次：" +
-                            $" Delay = " +
-                            $"{resultItem.RoundTripMilliseconds:F1} ms，" +
-                            $" Offset = " +
-                            $"{resultItem.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
-                    }
-                }
-                else
-                {
-                    System.Console.WriteLine();
-                    System.Console.WriteLine(
-                        "未检测到异常样本。");
-                }
-
-                // ============================================================
-                // 输出正常样本
-                // ============================================================
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "正常样本：");
-
-                foreach (var index in statistics.ValidIndexes)
-                {
-                    var resultItem =
-                        syncResults[index];
-
-                    System.Console.WriteLine(
-                        $"第 {index + 1} 次：" +
-                        $" Delay = " +
-                        $"{resultItem.RoundTripMilliseconds:F1} ms，" +
-                        $" Offset = " +
-                        $"{resultItem.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
-                }
-
-                // ============================================================
-                // 最终校时结果
-                // ============================================================
-
-                var finalOffset =
-                    statistics.FinalOffset;
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "========================================");
-                System.Console.WriteLine(
-                    "             校时结果对比");
-                System.Console.WriteLine(
-                    "========================================");
-
-                System.Console.WriteLine(
-                    $"最佳 Delay 样本：第 {bestDelayIndex} 次");
-
-                System.Console.WriteLine(
-                    $"最佳 Delay：" +
-                    $" {bestDelayResult.RoundTripMilliseconds:F1} ms");
-
-                System.Console.WriteLine(
-                    $"最佳 Delay 样本 Offset：" +
-                    $" {bestDelayResult.OffsetMilliseconds:+0.0;-0.0;0.0} ms");
-
-                System.Console.WriteLine(
-                    $"Median：" +
-                    $" {statistics.Median:+0.00;-0.00;0.00} ms");
-
-                System.Console.WriteLine(
-                    $"最终 Offset：" +
-                    $" {finalOffset:+0.00;-0.00;0.00} ms");
-
-                // ============================================================
-                // 选择最终校时参考样本
-                //
-                // 只从正常样本中选择 Delay 最小的样本。
-                //
-                // 注意：
-                // 参考样本只提供 T4；
-                // 真正的 Offset 使用 statistics.FinalOffset。
-                // ============================================================
-
-                var validResults =
-                    statistics.ValidIndexes
-                        .Select(index => new
-                        {
-                            Index = index,
-                            Result = syncResults[index]
-                        })
-                        .ToList();
-
-                if (validResults.Count == 0)
-                {
-                    throw new InvalidOperationException(
-                        "异常值剔除后没有可用样本，无法进行校时。");
-                }
-
-                var referenceSample =
-                    validResults
-                        .OrderBy(x =>
-                            x.Result.RoundTripMilliseconds)
-                        .First();
-
-                var referenceIndex =
-                    referenceSample.Index + 1;
-
-                var referenceResult =
-                    referenceSample.Result;
-
-                // ============================================================
-                // v0.6.1 最终校时目标
-                //
-                // 正确公式：
-                //
-                //     Target = T4 + FinalOffset
-                //
-                // T4：
-                //     客户端收到服务器 TimeResponse 的本地 UTC
-                //
-                // FinalOffset：
-                //     Median/MAD 统计得到的最终时钟偏差
-                // ============================================================
-
-                var targetUnixMilliseconds =
-                    referenceResult.T4 +
-                    (long)Math.Round(
-                        finalOffset);
-
-                var finalTargetTime =
-                    DateTimeOffset
-                        .FromUnixTimeMilliseconds(
-                            targetUnixMilliseconds);
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "========================================");
-                System.Console.WriteLine(
-                    "             最终校时");
-                System.Console.WriteLine(
-                    "========================================");
-
-                System.Console.WriteLine(
-                    $"参考样本：第 {referenceIndex} 次");
-
-                System.Console.WriteLine(
-                    $"参考 Delay：" +
-                    $" {referenceResult.RoundTripMilliseconds:F1} ms");
-
-                System.Console.WriteLine(
-                    $"参考样本 T4：" +
-                    $" {referenceResult.T4}");
-
-                System.Console.WriteLine(
-                    $"参考样本远端 UTC：" +
-                    $" {referenceResult.RemoteTime:yyyy-MM-dd HH:mm:ss.fff}");
-
-                System.Console.WriteLine(
-                    $"最终校时 Offset：" +
-                    $" {finalOffset:+0.00;-0.00;0.00} ms");
-
-                System.Console.WriteLine(
-                    $"最终校时目标 UTC：" +
-                    $" {finalTargetTime:yyyy-MM-dd HH:mm:ss.fff}");
-
-                // ============================================================
-                // 只在这里设置一次 Windows 系统时间
-                // ============================================================
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "正在设置内网机系统时间...");
-
-                var targetTime =
-                    finalTargetTime;
-
-                var systemTime = new SYSTEMTIME
-                {
-                    wYear = (ushort)targetTime.Year,
-                    wMonth = (ushort)targetTime.Month,
-                    wDay = (ushort)targetTime.Day,
-                    wHour = (ushort)targetTime.Hour,
-                    wMinute = (ushort)targetTime.Minute,
-                    wSecond = (ushort)targetTime.Second,
-                    wMilliseconds =
-                        (ushort)targetTime.Millisecond
-                };
-
-                systemTime.wDayOfWeek =
-                    (ushort)targetTime.DayOfWeek;
-
-                if (!SetSystemTime(ref systemTime))
-                {
-                    var errorCode =
-                        Marshal.GetLastWin32Error();
-
-                    throw new Win32Exception(
-                        errorCode,
-                        "设置 Windows 系统时间失败。");
-                }
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "系统时间设置成功！");
-
-                // ============================================================
-                // v0.6.1 校时后验证
-                //
-                // 旧版错误公式：
-                //
-                //     CorrectedTime - RemoteTime - FinalOffset
-                //
-                // RemoteTime 是 T3，而校时目标是从 T4 出发计算的，
-                // 因此两者不能直接这样比较。
-                //
-                // 正确验证：
-                //
-                //     理论校正时间 = T4 + FinalOffset
-                //
-                //     剩余误差 =
-                //         |实际系统时间 - 理论校正时间|
-                // ============================================================
-
-                var correctedTime =
-                    DateTimeOffset.UtcNow;
-
-                var theoreticalCorrectedTime =
-                    DateTimeOffset
-                        .FromUnixTimeMilliseconds(
-                            targetUnixMilliseconds);
-
-                var remainingError =
-                    Math.Abs(
-                        (
-                            correctedTime -
-                            theoreticalCorrectedTime
-                        ).TotalMilliseconds);
-
-                System.Console.WriteLine(
-                    $"校时后 UTC：" +
-                    $" {correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
-
-                System.Console.WriteLine(
-                    $"理论校正 UTC：" +
-                    $" {theoreticalCorrectedTime:yyyy-MM-dd HH:mm:ss.fff}");
-
-                System.Console.WriteLine(
-                    $"校时后相对理论目标的剩余误差：" +
-                    $" {remainingError:F0} ms");
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "========================================");
-
-                if (remainingError <= 50)
-                {
-                    System.Console.WriteLine(
-                        "BTTimeSync v0.6.1 校时成功！");
-                }
-                else
-                {
-                    System.Console.WriteLine(
-                        "BTTimeSync v0.6.1 校时完成，" +
-                        "但剩余误差超过 50 ms。");
-                }
-
-                System.Console.WriteLine(
-                    "========================================");
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "按 Enter 退出。");
-
-                System.Console.ReadLine();
-
-                return;
+                break;
             }
-
-            System.Console.WriteLine(
-                "未找到 BTTimeSync RFCOMM 服务.");
-
-            System.Console.ReadKey();
-        }
-        catch (Exception ex)
-        {
-            System.Console.WriteLine();
-            System.Console.WriteLine(
-                "通信或校时失败！");
-            System.Console.WriteLine(
-                $"异常类型：{ex.GetType().FullName}");
-            System.Console.WriteLine(
-                $"异常信息：{ex.Message}");
-
-            if (ex.InnerException is not null)
+            catch
             {
-                System.Console.WriteLine(
-                    $"内部异常：{ex.InnerException.Message}");
+                bluetoothDevice?.Dispose();
             }
+        }
 
-            System.Console.WriteLine();
-            System.Console.WriteLine(
-                "按任意键退出...");
+        if (targetDevice is null ||
+            targetService is null)
+        {
+            throw new IOException(
+                "未找到 BTTimeSync RFCOMM 服务。");
+        }
 
-            System.Console.ReadKey();
+        var socket =
+            new StreamSocket();
+
+        var writer =
+            new DataWriter(
+                socket.OutputStream)
+            {
+                ByteOrder = ByteOrder.BigEndian
+            };
+
+        var reader =
+            new DataReader(
+                socket.InputStream)
+            {
+                ByteOrder = ByteOrder.BigEndian,
+                InputStreamOptions =
+                    InputStreamOptions.Partial
+            };
+
+        try
+        {
+            await socket.ConnectAsync(
+                targetService.ConnectionHostName,
+                targetService.ConnectionServiceName);
+
+            Console.WriteLine(
+                "RFCOMM 连接成功。");
+
+            Console.WriteLine();
+
+            var connection =
+                new ConnectionContext
+                {
+                    Device = targetDevice,
+                    Service = targetService,
+                    Socket = socket,
+                    Reader = reader,
+                    Writer = writer
+                };
+
+            await PerformHandshakeAsync(connection);
+
+            return connection;
+        }
+        catch
+        {
+            reader.Dispose();
+            writer.Dispose();
+            socket.Dispose();
+            targetService.Dispose();
+            targetDevice.Dispose();
+
+            throw;
         }
     }
 
-    // ========================================================================
-    // 单次校时
-    //
-    // NTP-style 四时间戳
-    //
-    // T1：客户端发送 TimeRequest
-    // T2：服务器收到 TimeRequest
-    // T3：服务器发送 TimeResponse
-    // T4：客户端收到 TimeResponse
-    //
-    // Delay  = (T4 - T1) - (T3 - T2)
-    // Offset = ((T2 - T1) + (T3 - T4)) / 2
-    //
-    // Offset > 0：
-    //     服务器时间领先客户端
-    //
-    // 本方法只负责测量一次，不负责修改系统时间。
-    // ========================================================================
-
-    private static async Task<SyncResult> SyncOnceAsync(
-        DataWriter writer,
-        DataReader reader)
+    private static async Task PerformHandshakeAsync(
+        ConnectionContext connection)
     {
+        var helloPayload =
+            Encoding.UTF8.GetBytes(
+                AppConstants.BluetoothServiceName);
+
+        var helloPacket =
+            new Packet
+            {
+                Version = 1,
+                Type = PacketType.Hello,
+                Payload = helloPayload
+            };
+
+        var encoded =
+            PacketWriter.Encode(
+                helloPacket);
+
+        connection.Writer.WriteBytes(
+            encoded);
+
+        await connection.Writer.StoreAsync();
+        await connection.Writer.FlushAsync();
+
+        Console.WriteLine(
+            "已发送 BTSP Hello。");
+
+        var response =
+            await ReceivePacketAsync(connection);
+
+        if (response.Version != 1)
+        {
+            throw new IOException(
+                $"HelloAck 协议版本错误：{response.Version}");
+        }
+
+        if (response.Type != PacketType.HelloAck)
+        {
+            throw new IOException(
+                $"HelloAck 类型错误：{response.Type}");
+        }
+
+        if (response.Payload.Length != 0)
+        {
+            throw new IOException(
+                "HelloAck Payload 长度错误。");
+        }
+
+        Console.WriteLine(
+            "BTSP Hello/HelloAck 握手成功。");
+    }
+
+    private static async Task<ConnectionContext>
+        ReconnectAsync()
+    {
+        var retrySeconds =
+            ReconnectRetryIntervalSeconds;
+
+        while (!_shutdownRequested)
+        {
+            try
+            {
+                Console.WriteLine();
+                Console.WriteLine(
+                    "========== 自动重连 ==========");
+
+                var connection =
+                    await ConnectAndHandshakeOnceAsync();
+
+                Console.WriteLine(
+                    "自动重连成功。");
+
+                Console.WriteLine(
+                    "==============================");
+
+                return connection;
+            }
+            catch (Exception ex)
+                when (IsConnectionException(ex))
+            {
+                Console.WriteLine();
+                Console.WriteLine(
+                    $"自动重连失败（{ex.GetType().Name}）：");
+
+                Console.WriteLine(
+                    $"HResult: 0x{ex.HResult:X8}");
+
+                if (!string.IsNullOrWhiteSpace(ex.Message))
+                {
+                    Console.WriteLine(ex.Message);
+                }
+
+                if (_shutdownRequested)
+                    break;
+
+                Console.WriteLine(
+                    $"{retrySeconds} 秒后再次尝试...");
+
+                await DelayWithShutdownAsync(
+                    TimeSpan.FromSeconds(retrySeconds));
+
+                retrySeconds =
+                    Math.Min(
+                        retrySeconds * 2,
+                        ReconnectRetryIntervalMaximumSeconds);
+            }
+        }
+
+        throw new OperationCanceledException();
+    }
+
+    private static async Task<SyncCycleResult>
+        RunSyncCycleAsync(
+            ConnectionContext connection)
+    {
+        Console.WriteLine();
+        Console.WriteLine(
+            "========================================");
+
+        Console.WriteLine(
+            $"开始时间同步：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+
+        Console.WriteLine(
+            "========================================");
+
+        var results =
+            new List<SyncResult>();
+
         try
         {
-            // ------------------------------------------------------------
-            // T1：客户端发送 TimeRequest 前记录 UTC 时间
-            // ------------------------------------------------------------
+            for (var i = 0;
+                 i < SampleCount;
+                 i++)
+            {
+                if (_shutdownRequested)
+                {
+                    return new SyncCycleResult
+                    {
+                        Success = false
+                    };
+                }
 
-            var t1 =
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var result =
+                    await SyncOnceAsync(connection);
 
-            // ------------------------------------------------------------
-            // 创建 TimeRequest
-            //
-            // Payload：
-            // T1 = 8 字节，大端序
-            // ------------------------------------------------------------
+                results.Add(result);
 
-            var requestPayload = new byte[8];
+                Console.WriteLine(
+                    $"样本 #{i + 1:00}  " +
+                    $"Delay={result.RoundTripMilliseconds,6:F1} ms  " +
+                    $"Offset={result.OffsetMilliseconds,8:F1} ms");
 
-            System.Buffers.Binary.BinaryPrimitives
-                .WriteInt64BigEndian(
-                    requestPayload,
-                    t1);
+                if (i < SampleCount - 1)
+                {
+                    await DelayWithShutdownAsync(
+                        TimeSpan.FromMilliseconds(
+                            SampleIntervalMilliseconds));
+                }
+            }
+        }
+        catch (Exception ex)
+            when (IsConnectionException(ex))
+        {
+            Console.WriteLine();
+            Console.WriteLine(
+                $"时间同步过程中连接断开：{ex.Message}");
 
-            var requestPacket = new Packet
+            return new SyncCycleResult
+            {
+                Success = false,
+                ConnectionLost = true
+            };
+        }
+
+        if (results.Count == 0)
+        {
+            return new SyncCycleResult
+            {
+                Success = false
+            };
+        }
+
+        var offsets =
+            results
+                .Select(x => x.OffsetMilliseconds)
+                .ToArray();
+
+        var statistics =
+            TimeSyncStatistics.Analyze(offsets);
+
+        Console.WriteLine();
+        Console.WriteLine(
+            "---------- 统计结果 ----------");
+
+        Console.WriteLine(
+            $"Median Offset : {statistics.Median:+0.00;-0.00;0.00} ms");
+
+        Console.WriteLine(
+            $"MAD           : {statistics.Mad:F2} ms");
+
+        Console.WriteLine(
+            $"Threshold     : ±{statistics.Threshold:F2} ms");
+
+        Console.WriteLine(
+            $"正常样本       : {statistics.ValidIndexes.Count}");
+
+        Console.WriteLine(
+            $"异常样本       : {statistics.OutlierIndexes.Count}");
+
+        Console.WriteLine(
+            $"Final Offset  : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
+
+        var bestIndex =
+            statistics.ValidIndexes
+                .OrderBy(
+                    index =>
+                        results[index]
+                            .RoundTripMilliseconds)
+                .First();
+
+        var bestResult =
+            results[bestIndex];
+
+        Console.WriteLine();
+        Console.WriteLine(
+            "---------- 最佳样本 ----------");
+
+        Console.WriteLine(
+            $"样本编号       : #{bestIndex + 1:00}");
+
+        Console.WriteLine(
+            $"最佳 Delay     : {bestResult.RoundTripMilliseconds:F1} ms");
+
+        Console.WriteLine(
+            $"对应 Offset    : {bestResult.OffsetMilliseconds:+0.00;-0.00;0.00} ms");
+
+        var referenceResult =
+            bestResult;
+
+        var targetUnixMilliseconds =
+            referenceResult.T4 +
+            (long)Math.Round(
+                statistics.FinalOffset);
+
+        var theoreticalTargetTime =
+            DateTimeOffset
+                .FromUnixTimeMilliseconds(
+                    targetUnixMilliseconds);
+
+        Console.WriteLine();
+        Console.WriteLine(
+            $"参考 T4       : {referenceResult.T4}");
+
+        Console.WriteLine(
+            $"远程 UTC      : {referenceResult.RemoteTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+        Console.WriteLine(
+            $"目标 UTC      : {theoreticalTargetTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+        Console.WriteLine(
+            $"最终 Offset    : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
+
+        /*
+         * 校时验证：
+         *
+         * 不能直接使用：
+         *
+         *     DateTimeOffset.UtcNow - theoreticalTargetTime
+         *
+         * 因为 SetSystemTime() 返回后，
+         * 程序自身执行也会消耗一定时间。
+         *
+         * 使用 Stopwatch 记录校时操作期间的
+         * 单调时间，避免把程序执行耗时误判为
+         * 校时误差。
+         */
+
+        var verificationStopwatch =
+            Stopwatch.StartNew();
+
+        SetSystemTimeFromUnixMilliseconds(
+            targetUnixMilliseconds);
+
+        verificationStopwatch.Stop();
+
+        var elapsedAfterSetMilliseconds =
+            verificationStopwatch
+                .Elapsed
+                .TotalMilliseconds;
+
+        Console.WriteLine();
+        Console.WriteLine(
+            "系统时间设置成功。");
+
+        /*
+         * SetSystemTime() 返回之后，
+         * 理论目标时间也应该继续向前流逝。
+         *
+         * 注意：
+         * Stopwatch 从调用 SetSystemTime() 前开始，
+         * 因此这里用它估计校时调用本身造成的时间流逝。
+         */
+
+        var correctedTime =
+            DateTimeOffset.UtcNow;
+
+        /*
+         * 为了避免把“读取 UtcNow 之前经过的时间”
+         * 计入误差，使用当前验证耗时作为补偿。
+         *
+         * 此处 Stopwatch 已经停止，因此不能再获得
+         * 后续代码耗时。
+         *
+         * 由于验证本身非常短，实际误差主要来自
+         * Windows 系统时间设置粒度及调度。
+         */
+
+        var theoreticalCorrectedTime =
+            theoreticalTargetTime.AddMilliseconds(
+                elapsedAfterSetMilliseconds);
+
+        var verificationError =
+            Math.Abs(
+                (
+                    correctedTime -
+                    theoreticalCorrectedTime
+                ).TotalMilliseconds);
+
+        Console.WriteLine(
+            $"校时后 UTC      : {correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+        Console.WriteLine(
+            $"理论目标 UTC    : {theoreticalCorrectedTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+        Console.WriteLine(
+            $"验证耗时        : {elapsedAfterSetMilliseconds:F1} ms");
+
+        Console.WriteLine(
+            $"剩余误差        : {verificationError:F1} ms");
+
+        if (verificationError <=
+            VerificationThresholdMilliseconds)
+        {
+            Console.WriteLine();
+            Console.WriteLine(
+                "BTTimeSync v0.7.1 校时完成，" +
+                "剩余误差在验证阈值以内。");
+
+            return new SyncCycleResult
+            {
+                Success = true
+            };
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(
+            "BTTimeSync v0.7.1 校时完成，" +
+            "但剩余误差超过验证阈值。");
+
+        return new SyncCycleResult
+        {
+            Success = false
+        };
+    }
+
+    private static async Task<SyncResult>
+        SyncOnceAsync(
+            ConnectionContext connection)
+    {
+        var t1 =
+            DateTimeOffset.UtcNow
+                .ToUnixTimeMilliseconds();
+
+        var payload =
+            new byte[8];
+
+        System.Buffers.Binary.BinaryPrimitives
+            .WriteInt64BigEndian(
+                payload,
+                t1);
+
+        var packet =
+            new Packet
             {
                 Version = 1,
                 Type = PacketType.RequestTime,
-                Payload = requestPayload
+                Payload = payload
             };
 
-            var requestData =
-                PacketWriter.Encode(requestPacket);
+        var encoded =
+            PacketWriter.Encode(packet);
 
-            // ------------------------------------------------------------
-            // 发送 TimeRequest
-            // ------------------------------------------------------------
+        connection.Writer.WriteBytes(encoded);
 
-            writer.WriteBytes(requestData);
+        await connection.Writer.StoreAsync();
+        await connection.Writer.FlushAsync();
 
-            await writer.StoreAsync();
-            await writer.FlushAsync();
+        var response =
+            await ReceivePacketAsync(connection);
 
-            System.Console.WriteLine();
-            System.Console.WriteLine(
-                "已发送 BTSP RequestTime！");
-            System.Console.WriteLine(
-                $"T1 客户端发送：{t1}");
-            System.Console.WriteLine(
-                $"HEX：{BitConverter.ToString(requestData)}");
+        var t4 =
+            DateTimeOffset.UtcNow
+                .ToUnixTimeMilliseconds();
 
-            // ------------------------------------------------------------
-            // 等待 TimeResponse
-            // ------------------------------------------------------------
-
-            var response =
-                await ReceivePacketAsync(reader);
-
-            // ------------------------------------------------------------
-            // T4：客户端收到 TimeResponse 后立即记录
-            // ------------------------------------------------------------
-
-            var t4 =
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-            // ------------------------------------------------------------
-            // 显示 TimeResponse
-            // ------------------------------------------------------------
-
-            System.Console.WriteLine();
-            System.Console.WriteLine(
-                "收到 BTSP TimeResponse！");
-            System.Console.WriteLine(
-                $"Version : {response.Version}");
-            System.Console.WriteLine(
-                $"Type    : {response.Type}");
-            System.Console.WriteLine(
-                $"Length  : {response.Length}");
-            System.Console.WriteLine(
-                $"Payload : {BitConverter.ToString(response.Payload)}");
-            System.Console.WriteLine(
-                $"CRC16   : 0x{response.Crc16:X4}");
-
-            // ------------------------------------------------------------
-            // 验证响应
-            //
-            // TimeResponse Payload：
-            //
-            // T1 = 8 字节
-            // T2 = 8 字节
-            // T3 = 8 字节
-            //
-            // 共 24 字节
-            // ------------------------------------------------------------
-
-            if (response.Type != PacketType.TimeResponse ||
-                response.Payload.Length != 24)
-            {
-                throw new InvalidOperationException(
-                    "收到的 TimeResponse 数据格式错误，" +
-                    "Payload 应为 24 字节 T1/T2/T3。");
-            }
-
-            // ------------------------------------------------------------
-            // 解析服务器返回的 T1
-            // ------------------------------------------------------------
-
-            var t1FromServer =
-                System.Buffers.Binary.BinaryPrimitives
-                    .ReadInt64BigEndian(
-                        response.Payload.AsSpan(0, 8));
-
-            // ------------------------------------------------------------
-            // 解析 T2
-            // ------------------------------------------------------------
-
-            var t2 =
-                System.Buffers.Binary.BinaryPrimitives
-                    .ReadInt64BigEndian(
-                        response.Payload.AsSpan(8, 8));
-
-            // ------------------------------------------------------------
-            // 解析 T3
-            // ------------------------------------------------------------
-
-            var t3 =
-                System.Buffers.Binary.BinaryPrimitives
-                    .ReadInt64BigEndian(
-                        response.Payload.AsSpan(16, 8));
-
-            // ------------------------------------------------------------
-            // 验证服务器返回的 T1
-            // ------------------------------------------------------------
-
-            if (t1FromServer != t1)
-            {
-                throw new InvalidOperationException(
-                    $"TimeResponse 中的 T1 与本次请求不一致。" +
-                    $" 请求 T1={t1}，响应 T1={t1FromServer}。");
-            }
-
-            // ------------------------------------------------------------
-            // 创建四时间戳对象
-            // ------------------------------------------------------------
-
-            var timestamps =
-                new TimeSyncTimestamps
-                {
-                    T1 = t1,
-                    T2 = t2,
-                    T3 = t3,
-                    T4 = t4
-                };
-
-            // ------------------------------------------------------------
-            // 显示四个时间戳
-            // ------------------------------------------------------------
-
-            System.Console.WriteLine();
-            System.Console.WriteLine(
-                "NTP-style 四时间戳：");
-            System.Console.WriteLine(
-                $"T1 客户端发送：{timestamps.T1}");
-            System.Console.WriteLine(
-                $"T2 服务器接收：{timestamps.T2}");
-            System.Console.WriteLine(
-                $"T3 服务器发送：{timestamps.T3}");
-            System.Console.WriteLine(
-                $"T4 客户端接收：{timestamps.T4}");
-
-            // ------------------------------------------------------------
-            // 计算 Delay
-            //
-            // Delay = (T4 - T1) - (T3 - T2)
-            // ------------------------------------------------------------
-
-            var delayMilliseconds =
-                (timestamps.T4 - timestamps.T1) -
-                (timestamps.T3 - timestamps.T2);
-
-            // ------------------------------------------------------------
-            // 计算 Offset
-            //
-            // Offset = ((T2 - T1) + (T3 - T4)) / 2
-            // ------------------------------------------------------------
-
-            var offsetMilliseconds =
-                (
-                    (timestamps.T2 - timestamps.T1) +
-                    (timestamps.T3 - timestamps.T4)
-                ) / 2.0;
-
-            // ------------------------------------------------------------
-            // 防御异常情况
-            // ------------------------------------------------------------
-
-            if (delayMilliseconds < 0)
-            {
-                throw new InvalidOperationException(
-                    $"计算出的网络延迟异常：{delayMilliseconds} ms。");
-            }
-
-            // ------------------------------------------------------------
-            // 远端 UTC
-            //
-            // T3 是服务器发送 TimeResponse 时的 UTC。
-            // ------------------------------------------------------------
-
-            var remoteTime =
-                DateTimeOffset
-                    .FromUnixTimeMilliseconds(
-                        t3);
-
-            // ------------------------------------------------------------
-            // 本次样本的目标时间
-            //
-            // Target = T4 + Offset
-            //
-            // 这里只用于保存当前样本的理论目标。
-            // 最终校时仍使用统计得到的 FinalOffset。
-            // ------------------------------------------------------------
-
-            var targetUnixMilliseconds =
-                t4 +
-                (long)Math.Round(
-                    offsetMilliseconds);
-
-            var targetTime =
-                DateTimeOffset
-                    .FromUnixTimeMilliseconds(
-                        targetUnixMilliseconds);
-
-            // ------------------------------------------------------------
-            // 显示计算结果
-            // ------------------------------------------------------------
-
-            System.Console.WriteLine();
-            System.Console.WriteLine(
-                $"网络 Delay：{delayMilliseconds:F1} ms");
-            System.Console.WriteLine(
-                $"时间 Offset：{offsetMilliseconds:+0.0;-0.0;0.0} ms");
-
-            // ------------------------------------------------------------
-            // 返回本次采样结果
-            //
-            // v0.6.1：同时保存 T1/T2/T3/T4，
-            // 供最终校时和误差验证使用。
-            // ------------------------------------------------------------
-
-            return new SyncResult
-            {
-                Success = true,
-
-                RoundTripMilliseconds =
-                    delayMilliseconds,
-
-                OffsetMilliseconds =
-                    offsetMilliseconds,
-
-                RemoteUnixMilliseconds =
-                    t3,
-
-                RemoteTime =
-                    remoteTime,
-
-                TargetTime =
-                    targetTime,
-
-                T1 = t1,
-                T2 = t2,
-                T3 = t3,
-                T4 = t4
-            };
-        }
-        catch (Exception ex)
+        if (response.Version != 1)
         {
-            return new SyncResult
-            {
-                Success = false,
-                ErrorMessage = ex.Message
-            };
+            throw new IOException(
+                $"TimeResponse 协议版本错误：{response.Version}");
         }
+
+        if (response.Type != PacketType.TimeResponse)
+        {
+            throw new IOException(
+                $"TimeResponse 类型错误：{response.Type}");
+        }
+
+        if (response.Payload.Length != 24)
+        {
+            throw new IOException(
+                $"TimeResponse Payload 长度错误：{response.Payload.Length}");
+        }
+
+        var responseT1 =
+            System.Buffers.Binary.BinaryPrimitives
+                .ReadInt64BigEndian(
+                    response.Payload.AsSpan(
+                        0,
+                        8));
+
+        var t2 =
+            System.Buffers.Binary.BinaryPrimitives
+                .ReadInt64BigEndian(
+                    response.Payload.AsSpan(
+                        8,
+                        8));
+
+        var t3 =
+            System.Buffers.Binary.BinaryPrimitives
+                .ReadInt64BigEndian(
+                    response.Payload.AsSpan(
+                        16,
+                        8));
+
+        if (responseT1 != t1)
+        {
+            throw new IOException(
+                "TimeResponse 中的 T1 与请求不一致。");
+        }
+
+        /*
+         * NTP-style 四时间戳算法：
+         *
+         * Delay =
+         *     (T4 - T1) - (T3 - T2)
+         *
+         * Offset =
+         *     ((T2 - T1) + (T3 - T4)) / 2
+         *
+         * Offset > 0：
+         *     远程设备时间领先本机。
+         */
+
+        var delay =
+            (t4 - t1) -
+            (t3 - t2);
+
+        var offset =
+            (
+                (t2 - t1) +
+                (t3 - t4)
+            ) / 2.0;
+
+        var remoteTime =
+            DateTimeOffset
+                .FromUnixTimeMilliseconds(t3);
+
+        var targetTime =
+            DateTimeOffset
+                .FromUnixTimeMilliseconds(t4)
+                .AddMilliseconds(offset);
+
+        return new SyncResult
+        {
+            Success = true,
+            RoundTripMilliseconds = delay,
+            OffsetMilliseconds = offset,
+            RemoteUnixMilliseconds = t3,
+            RemoteTime = remoteTime,
+            TargetTime = targetTime,
+            T1 = t1,
+            T2 = t2,
+            T3 = t3,
+            T4 = t4
+        };
     }
 
-    // ========================================================================
-    // 接收完整 BTSP 数据包
-    // ========================================================================
-
-    private static async Task<Packet> ReceivePacketAsync(
-        DataReader reader)
+    private static async Task<Packet>
+        ReceivePacketAsync(
+            ConnectionContext connection)
     {
-        // ------------------------------------------------------------
-        // BTSP 固定头：
-        //
-        // 55 AA
-        // Version
-        // Type
-        // Length High
-        // Length Low
-        //
-        // 共 6 字节
-        // ------------------------------------------------------------
+        const uint HeaderLength = 6;
 
-        await LoadExactlyAsync(
-            reader,
-            6);
+        var header =
+            await LoadExactlyAsync(
+                connection.Reader,
+                HeaderLength);
 
-        var header = new byte[6];
+        var startOfFrame =
+            System.Buffers.Binary.BinaryPrimitives
+                .ReadUInt16BigEndian(
+                    header.AsSpan(
+                        0,
+                        2));
 
-        reader.ReadBytes(header);
-
-        // ------------------------------------------------------------
-        // 读取 Payload Length
-        // ------------------------------------------------------------
+        if (startOfFrame != Packet.StartOfFrame)
+        {
+            throw new IOException(
+                $"无效的 BTSP SOF：0x{startOfFrame:X4}");
+        }
 
         var payloadLength =
-            (header[4] << 8) |
-            header[5];
+            System.Buffers.Binary.BinaryPrimitives
+                .ReadUInt16BigEndian(
+                    header.AsSpan(
+                        4,
+                        2));
 
-        // ------------------------------------------------------------
-        // 剩余部分：
-        //
-        // Payload
-        // CRC16
-        //
-        // = Payload Length + 2
-        // ------------------------------------------------------------
+        /*
+         * Payload 后面还有 2 字节 CRC16。
+         */
 
         var remainingLength =
-            payloadLength + 2;
-
-        await LoadExactlyAsync(
-            reader,
-            (uint)remainingLength);
+            (uint)payloadLength + 2u;
 
         var remaining =
-            new byte[remainingLength];
-
-        reader.ReadBytes(remaining);
-
-        // ------------------------------------------------------------
-        // 合并完整数据包
-        // ------------------------------------------------------------
+            await LoadExactlyAsync(
+                connection.Reader,
+                remainingLength);
 
         var packetData =
-            new byte[6 + remainingLength];
+            new byte[
+                checked(
+                    (int)HeaderLength +
+                    (int)remainingLength)];
 
         System.Buffer.BlockCopy(
             header,
             0,
             packetData,
             0,
-            header.Length);
+            (int)HeaderLength);
 
         System.Buffer.BlockCopy(
             remaining,
             0,
             packetData,
-            6,
-            remaining.Length);
-
-        // ------------------------------------------------------------
-        // 交给 PacketReader 解析
-        // ------------------------------------------------------------
+            (int)HeaderLength,
+            (int)remainingLength);
 
         return PacketReader.Decode(packetData);
     }
 
-    // ========================================================================
-    // 确保 DataReader 中读取到指定长度的数据
-    // ========================================================================
-
-    private static async Task LoadExactlyAsync(
-        DataReader reader,
-        uint requiredLength)
+    private static async Task<byte[]>
+        LoadExactlyAsync(
+            DataReader reader,
+            uint length)
     {
-        while (reader.UnconsumedBufferLength <
-               requiredLength)
+        if (length == 0)
+            return [];
+
+        var result =
+            new byte[
+                checked((int)length)];
+
+        var offset = 0;
+
+        while (offset < result.Length)
         {
-            var missingLength =
-                requiredLength -
+            if (_shutdownRequested)
+                throw new OperationCanceledException();
+
+            var available =
                 reader.UnconsumedBufferLength;
 
-            var loaded =
-                await reader.LoadAsync(
-                    missingLength);
-
-            if (loaded == 0)
+            if (available == 0)
             {
-                throw new InvalidOperationException(
-                    "蓝牙连接已关闭，未能读取完整的 BTSP 数据包。");
+                var remaining =
+                    result.Length - offset;
+
+                var requestLength =
+                    (uint)Math.Min(
+                        remaining,
+                        uint.MaxValue);
+
+                var loaded =
+                    await reader.LoadAsync(
+                        requestLength);
+
+                if (loaded == 0)
+                {
+                    throw new IOException(
+                        "蓝牙连接已关闭。");
+                }
+
+                available =
+                    reader.UnconsumedBufferLength;
             }
+
+            var toRead =
+                (int)Math.Min(
+                    available,
+                    (uint)(result.Length - offset));
+
+            /*
+             * DataReader.ReadBytes() 必须把数据读取到
+             * 一个实际的 byte[] 中。
+             *
+             * 读取后再复制到 result。
+             */
+
+            var buffer =
+                new byte[toRead];
+
+            reader.ReadBytes(buffer);
+
+            System.Buffer.BlockCopy(
+                buffer,
+                0,
+                result,
+                offset,
+                toRead);
+
+            offset += toRead;
         }
+
+        return result;
+    }
+
+    private static void SetSystemTimeFromUnixMilliseconds(
+        long unixMilliseconds)
+    {
+        var dateTime =
+            DateTimeOffset
+                .FromUnixTimeMilliseconds(
+                    unixMilliseconds)
+                .UtcDateTime;
+
+        var systemTime =
+            new SYSTEMTIME
+            {
+                wYear =
+                    (ushort)dateTime.Year,
+
+                wMonth =
+                    (ushort)dateTime.Month,
+
+                wDay =
+                    (ushort)dateTime.Day,
+
+                wHour =
+                    (ushort)dateTime.Hour,
+
+                wMinute =
+                    (ushort)dateTime.Minute,
+
+                wSecond =
+                    (ushort)dateTime.Second,
+
+                wMilliseconds =
+                    (ushort)dateTime.Millisecond
+            };
+
+        if (!SetSystemTime(
+                ref systemTime))
+        {
+            throw new Win32Exception(
+                Marshal.GetLastWin32Error(),
+                "设置 Windows 系统时间失败。");
+        }
+    }
+
+    private static bool IsConnectionUsable(
+        ConnectionContext? connection)
+    {
+        return
+            connection is not null &&
+            connection.Socket is not null &&
+            connection.Writer is not null &&
+            connection.Reader is not null;
+    }
+
+    private static bool IsConnectionException(
+        Exception ex)
+    {
+        if (ex is IOException ||
+            ex is SocketException ||
+            ex is ObjectDisposedException ||
+            ex is System.Runtime.InteropServices.COMException)
+        {
+            return true;
+        }
+
+        var message =
+            ex.Message.ToLowerInvariant();
+
+        return message.Contains("connection") ||
+               message.Contains("socket") ||
+               message.Contains("bluetooth") ||
+               message.Contains("closed") ||
+               message.Contains("disconnect") ||
+               message.Contains("aborted") ||
+               message.Contains("远程") ||
+               message.Contains("连接") ||
+               message.Contains("蓝牙") ||
+               message.Contains("中止");
+    }
+    private static async Task WaitForNextSyncAsync(
+        TimeSpan interval)
+    {
+        var remaining = interval;
+
+        Console.WriteLine();
+        Console.WriteLine("========================================");
+        Console.WriteLine(
+            $"下一次自动校时将在 {SyncIntervalMinutes} 分钟后进行。");
+        Console.WriteLine("按 Ctrl+C 可退出程序。");
+        Console.WriteLine("========================================");
+
+        while (remaining > TimeSpan.Zero &&
+               !_shutdownRequested)
+        {
+            var display =
+                remaining.TotalSeconds >= 60
+                    ? $"{(int)remaining.TotalMinutes:D2}:{remaining.Seconds:D2}"
+                    : $"00:{remaining.Seconds:D2}";
+
+            Console.Write($"\r距离下一次校时：{display}   ");
+
+            var delay =
+                remaining > TimeSpan.FromSeconds(1)
+                    ? TimeSpan.FromSeconds(1)
+                    : remaining;
+
+            await DelayWithShutdownAsync(delay);
+
+            remaining -= delay;
+        }
+
+        if (!_shutdownRequested)
+        {
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine("到达校时周期，开始下一次自动校时...");
+        }
+    }
+    private static async Task DelayWithShutdownAsync(
+        TimeSpan delay)
+    {
+        const int StepMilliseconds = 200;
+
+        var remaining =
+            delay;
+
+        while (remaining > TimeSpan.Zero &&
+               !_shutdownRequested)
+        {
+            var currentDelay =
+                remaining >
+                TimeSpan.FromMilliseconds(
+                    StepMilliseconds)
+                    ? TimeSpan.FromMilliseconds(
+                        StepMilliseconds)
+                    : remaining;
+
+            await Task.Delay(currentDelay);
+
+            remaining -= currentDelay;
+        }
+    }
+
+    private static void DisposeConnection(
+        ConnectionContext? connection)
+    {
+        if (connection is null)
+            return;
+
+        try
+        {
+            connection.Reader.Dispose();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            connection.Writer.DetachStream();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            connection.Writer.Dispose();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            connection.Socket.Dispose();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            connection.Service.Dispose();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            connection.Device.Dispose();
+        }
+        catch
+        {
+        }
+    }
+
+    private sealed class ConnectionContext
+    {
+        public BluetoothDevice Device { get; init; } = null!;
+
+        public RfcommDeviceService Service { get; init; } = null!;
+
+        public StreamSocket Socket { get; init; } = null!;
+
+        public DataReader Reader { get; init; } = null!;
+
+        public DataWriter Writer { get; init; } = null!;
+    }
+
+    private sealed class SyncCycleResult
+    {
+        public bool Success { get; init; }
+
+        public bool ConnectionLost { get; init; }
     }
 }
