@@ -178,188 +178,211 @@ internal class Program
                     "BTSP Hello 握手成功！");
 
                 // ====================================================
-                // 记录内网机发送前时间
+                // 连续校时模式（Persistent Session）
                 // ====================================================
-
-                var localTimeBefore =
-                    DateTimeOffset.UtcNow;
-
-                var localUnixMillisecondsBefore =
-                    localTimeBefore.ToUnixTimeMilliseconds();
-
-                // ====================================================
-                // 发送 RequestTime
-                // ====================================================
-
-                var requestPacket = new Packet
-                {
-                    Version = 1,
-                    Type = PacketType.RequestTime,
-                    Payload = []
-                };
-
-                var requestData =
-                    PacketWriter.Encode(requestPacket);
-
-                writer.WriteBytes(requestData);
-
-                await writer.StoreAsync();
-                await writer.FlushAsync();
 
                 System.Console.WriteLine();
                 System.Console.WriteLine(
-                    "已发送 BTSP RequestTime！");
-                System.Console.WriteLine(
-                    $"HEX：{BitConverter.ToString(requestData)}");
+                    "BTSP Hello 握手成功！");
 
-                // ====================================================
-                // 接收 TimeResponse
-                // ====================================================
+                var syncCount = 1;
 
-                var response =
-                    await ReceivePacketAsync(reader);
-
-                // ====================================================
-                // 记录内网机收到响应后的时间
-                // ====================================================
-
-                var localTimeAfter =
-                    DateTimeOffset.UtcNow;
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "收到 BTSP TimeResponse！");
-                System.Console.WriteLine(
-                    $"Version : {response.Version}");
-                System.Console.WriteLine(
-                    $"Type    : {response.Type}");
-                System.Console.WriteLine(
-                    $"Length  : {response.Length}");
-                System.Console.WriteLine(
-                    $"CRC16   : 0x{response.Crc16:X4}");
-
-                if (response.Type != PacketType.TimeResponse ||
-                    response.Payload.Length != 8)
+                while (true)
                 {
-                    throw new InvalidOperationException(
-                        "收到的 TimeResponse 数据格式错误。");
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        $"========== 第{syncCount}次校时 ==========");
+
+                    // ====================================================
+                    // 记录内网机发送前时间
+                    // ====================================================
+
+                    var localTimeBefore =
+                        DateTimeOffset.UtcNow;
+
+                    var localUnixMillisecondsBefore =
+                        localTimeBefore.ToUnixTimeMilliseconds();
+
+                    // ====================================================
+                    // 发送 RequestTime
+                    // ====================================================
+
+                    var requestPacket = new Packet
+                    {
+                        Version = 1,
+                        Type = PacketType.RequestTime,
+                        Payload = []
+                    };
+
+                    var requestData =
+                        PacketWriter.Encode(requestPacket);
+
+                    writer.WriteBytes(requestData);
+
+                    await writer.StoreAsync();
+                    await writer.FlushAsync();
+
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "已发送 BTSP RequestTime！");
+                    System.Console.WriteLine(
+                        $"HEX：{BitConverter.ToString(requestData)}");
+
+                    // ====================================================
+                    // 接收 TimeResponse
+                    // ====================================================
+
+                    var response =
+                        await ReceivePacketAsync(reader);
+
+                    // ====================================================
+                    // 记录内网机收到响应后的时间
+                    // ====================================================
+
+                    var localTimeAfter =
+                        DateTimeOffset.UtcNow;
+
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "收到 BTSP TimeResponse！");
+                    System.Console.WriteLine(
+                        $"Version : {response.Version}");
+                    System.Console.WriteLine(
+                        $"Type    : {response.Type}");
+                    System.Console.WriteLine(
+                        $"Length  : {response.Length}");
+                    System.Console.WriteLine(
+                        $"CRC16   : 0x{response.Crc16:X4}");
+
+                    if (response.Type != PacketType.TimeResponse ||
+                        response.Payload.Length != 8)
+                    {
+                        throw new InvalidOperationException(
+                            "收到的 TimeResponse 数据格式错误。");
+                    }
+
+                    var remoteUnixMilliseconds =
+                        System.Buffers.Binary.BinaryPrimitives
+                            .ReadInt64BigEndian(
+                                response.Payload);
+
+                    var remoteTime =
+                        DateTimeOffset
+                            .FromUnixTimeMilliseconds(
+                                remoteUnixMilliseconds);
+
+                    // ====================================================
+                    // 计算校时目标时间
+                    // ====================================================
+
+                    var localUnixMillisecondsAfter =
+                        localTimeAfter.ToUnixTimeMilliseconds();
+
+                    var localMidpointMilliseconds =
+                        (localUnixMillisecondsBefore +
+                         localUnixMillisecondsAfter) / 2.0;
+
+                    var offsetMilliseconds =
+                        remoteUnixMilliseconds -
+                        localMidpointMilliseconds;
+
+                    var targetUnixMilliseconds =
+                        localUnixMillisecondsAfter +
+                        (long)Math.Round(offsetMilliseconds);
+
+                    var targetTime =
+                        DateTimeOffset
+                            .FromUnixTimeMilliseconds(
+                                targetUnixMilliseconds);
+
+                    var roundTripMilliseconds =
+                        localUnixMillisecondsAfter -
+                        localUnixMillisecondsBefore;
+
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        $"内网机当前 UTC：{localTimeAfter:yyyy-MM-dd HH:mm:ss.fff}");
+
+                    System.Console.WriteLine(
+                        $"外网机 UTC：{remoteTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "========== 校时计算 ==========");
+
+                    System.Console.WriteLine(
+                        $"往返耗时：{roundTripMilliseconds:F1} ms");
+
+                    System.Console.WriteLine(
+                        $"时间偏差：{offsetMilliseconds:F1} ms");
+
+                    System.Console.WriteLine(
+                        $"校时目标 UTC：{targetTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+                    // ====================================================
+                    // 设置系统时间
+                    // ====================================================
+
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "正在设置内网机系统时间...");
+
+                    var systemTime = new SYSTEMTIME
+                    {
+                        wYear = (ushort)targetTime.Year,
+                        wMonth = (ushort)targetTime.Month,
+                        wDay = (ushort)targetTime.Day,
+                        wHour = (ushort)targetTime.Hour,
+                        wMinute = (ushort)targetTime.Minute,
+                        wSecond = (ushort)targetTime.Second,
+                        wMilliseconds = (ushort)targetTime.Millisecond
+                    };
+
+                    if (!SetSystemTime(ref systemTime))
+                    {
+                        var errorCode =
+                            Marshal.GetLastWin32Error();
+
+                        throw new Win32Exception(
+                            errorCode,
+                            $"设置系统时间失败，Windows 错误代码：{errorCode}");
+                    }
+
+                    var correctedTime =
+                        DateTimeOffset.UtcNow;
+
+                    var remainingError =
+                        correctedTime.ToUnixTimeMilliseconds() -
+                        remoteUnixMilliseconds;
+
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "系统时间设置成功！");
+
+                    System.Console.WriteLine(
+                        $"校时后 UTC：{correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
+
+                    System.Console.WriteLine(
+                        $"校时后剩余误差：{remainingError} ms");
+
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "BTTimeSync 系统校时成功！");
+
+                    syncCount++;
+
+                    System.Console.WriteLine();
+                    System.Console.WriteLine(
+                        "按 Enter 再次校时，按 Q 退出：");
+
+                    var key =
+                        System.Console.ReadKey(true);
+
+                    if (key.Key == ConsoleKey.Q)
+                    {
+                        break;
+                    }
                 }
-
-                var remoteUnixMilliseconds =
-                    System.Buffers.Binary.BinaryPrimitives
-                        .ReadInt64BigEndian(
-                            response.Payload);
-
-                var remoteTime =
-                    DateTimeOffset
-                        .FromUnixTimeMilliseconds(
-                            remoteUnixMilliseconds);
-
-                // ====================================================
-                // 计算校时目标时间
-                // ====================================================
-
-                var localUnixMillisecondsAfter =
-                    localTimeAfter.ToUnixTimeMilliseconds();
-
-                var localMidpointMilliseconds =
-                    (localUnixMillisecondsBefore +
-                     localUnixMillisecondsAfter) / 2.0;
-
-                var offsetMilliseconds =
-                    remoteUnixMilliseconds -
-                    localMidpointMilliseconds;
-
-                var targetUnixMilliseconds =
-                    localUnixMillisecondsAfter +
-                    (long)Math.Round(offsetMilliseconds);
-
-                var targetTime =
-                    DateTimeOffset
-                        .FromUnixTimeMilliseconds(
-                            targetUnixMilliseconds);
-
-                var roundTripMilliseconds =
-                    localUnixMillisecondsAfter -
-                    localUnixMillisecondsBefore;
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    $"内网机当前 UTC：{localTimeAfter:yyyy-MM-dd HH:mm:ss.fff}");
-
-                System.Console.WriteLine(
-                    $"外网机 UTC：{remoteTime:yyyy-MM-dd HH:mm:ss.fff}");
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "========== 校时计算 ==========");
-
-                System.Console.WriteLine(
-                    $"往返耗时：{roundTripMilliseconds:F1} ms");
-
-                System.Console.WriteLine(
-                    $"时间偏差：{offsetMilliseconds:F1} ms");
-
-                System.Console.WriteLine(
-                    $"校时目标 UTC：{targetTime:yyyy-MM-dd HH:mm:ss.fff}");
-
-                // ====================================================
-                // 设置内网机系统时间
-                // ====================================================
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "正在设置内网机系统时间...");
-
-                var systemTime = new SYSTEMTIME
-                {
-                    wYear = (ushort)targetTime.Year,
-                    wMonth = (ushort)targetTime.Month,
-                    wDay = (ushort)targetTime.Day,
-                    wHour = (ushort)targetTime.Hour,
-                    wMinute = (ushort)targetTime.Minute,
-                    wSecond = (ushort)targetTime.Second,
-                    wMilliseconds =
-                        (ushort)targetTime.Millisecond
-                };
-
-                if (!SetSystemTime(ref systemTime))
-                {
-                    var errorCode =
-                        Marshal.GetLastWin32Error();
-
-                    throw new Win32Exception(
-                        errorCode,
-                        $"设置系统时间失败，Windows 错误代码：{errorCode}");
-                }
-
-                var correctedTime =
-                    DateTimeOffset.UtcNow;
-
-                System.Console.WriteLine(
-                    "系统时间设置成功！");
-
-                System.Console.WriteLine(
-                    $"校时后 UTC：{correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
-
-                System.Console.WriteLine();
-
-                var remainingError =
-                    correctedTime.ToUnixTimeMilliseconds() -
-                    remoteUnixMilliseconds;
-
-                System.Console.WriteLine(
-                    $"校时后剩余误差：{remainingError} ms");
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "BTTimeSync 系统校时成功！");
-
-                System.Console.WriteLine();
-                System.Console.WriteLine(
-                    "按任意键退出...");
-
-                System.Console.ReadKey();
 
                 return;
             }
