@@ -1,38 +1,26 @@
 ﻿namespace BTTimeSync.Common;
 
-public class SyncResult
+public sealed class SyncResult
 {
-    public bool Success { get; set; }
+    public bool Success { get; init; }
 
-    public double RoundTripMilliseconds { get; set; }
+    public double RoundTripMilliseconds { get; init; }
 
-    public double OffsetMilliseconds { get; set; }
+    public double OffsetMilliseconds { get; init; }
 
-    public long RemoteUnixMilliseconds { get; set; }
+    public long RemoteUnixMilliseconds { get; init; }
 
-    public DateTimeOffset RemoteTime { get; set; }
+    public DateTimeOffset RemoteTime { get; init; }
 
-    public DateTimeOffset TargetTime { get; set; }
+    public DateTimeOffset TargetTime { get; init; }
 
-    /// <summary>
-    /// T1：客户端发送 TimeRequest 的时间戳。
-    /// </summary>
-    public long T1 { get; set; }
+    public long T1 { get; init; }
 
-    /// <summary>
-    /// T2：服务器收到 TimeRequest 的时间戳。
-    /// </summary>
-    public long T2 { get; set; }
+    public long T2 { get; init; }
 
-    /// <summary>
-    /// T3：服务器发送 TimeResponse 的时间戳。
-    /// </summary>
-    public long T3 { get; set; }
+    public long T3 { get; init; }
 
-    /// <summary>
-    /// T4：客户端收到 TimeResponse 的时间戳。
-    /// </summary>
-    public long T4 { get; set; }
+    public long T4 { get; init; }
 
-    public string? ErrorMessage { get; set; }
+    public string? ErrorMessage { get; init; }
 }

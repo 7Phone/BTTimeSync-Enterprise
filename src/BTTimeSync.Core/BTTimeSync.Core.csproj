@@ -10,8 +10,4 @@
     <ProjectReference Include="..\BTTimeSync.Common\BTTimeSync.Common.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Folder Include="Services\" />
-  </ItemGroup>
-
 </Project>

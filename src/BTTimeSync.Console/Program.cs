@@ -1,30 +1,26 @@
-﻿using BTTimeSync.Common;
+﻿using BTTimeSync.Bluetooth.Interfaces;
+using BTTimeSync.Bluetooth.Services;
+using BTTimeSync.Common;
 using BTTimeSync.Core;
-using BTTimeSync.Core.Protocol;
+using BTTimeSync.Core.Interfaces;
+using BTTimeSync.Core.Services;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
-using Windows.Devices.Bluetooth;
-using Windows.Devices.Bluetooth.Rfcomm;
-using Windows.Devices.Enumeration;
-using Windows.Networking.Sockets;
-using Windows.Storage.Streams;
 
 internal class Program
 {
     private const int SampleCount = 10;
     private const int SampleIntervalMilliseconds = 100;
-
     private const int SyncIntervalMinutes = 30;
-
     private const double VerificationThresholdMilliseconds = 50.0;
-
     private const int ReconnectRetryIntervalSeconds = 5;
     private const int ReconnectRetryIntervalMaximumSeconds = 30;
 
     private static volatile bool _shutdownRequested;
+    private static IBluetoothService? _bluetoothService;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SYSTEMTIME
@@ -52,25 +48,30 @@ internal class Program
 
         Console.CancelKeyPress += OnCancelKeyPress;
 
-        ConnectionContext? connection = null;
-
         try
         {
-            connection = await ConnectAndHandshakeAsync();
+            _bluetoothService =
+                new BluetoothService();
+
+            ITimeSyncService timeSyncService =
+                new TimeSyncService(_bluetoothService);
+            await ConnectAndHandshakeAsync();
 
             while (!_shutdownRequested)
             {
-                if (!IsConnectionUsable(connection))
+                if (!_bluetoothService.IsConnected)
                 {
-                    DisposeConnection(connection);
-                    connection = await ReconnectAsync();
+                    await _bluetoothService.DisconnectAsync();
+
+                    await ReconnectAsync();
 
                     if (_shutdownRequested)
                         break;
                 }
 
                 var syncResult =
-                    await RunSyncCycleAsync(connection);
+                    await RunSyncCycleAsync(
+                        timeSyncService);
 
                 if (_shutdownRequested)
                     break;
@@ -78,11 +79,16 @@ internal class Program
                 if (syncResult.ConnectionLost)
                 {
                     Console.WriteLine();
-                    Console.WriteLine("检测到蓝牙连接断开。");
-                    Console.WriteLine("准备自动重新连接...");
+                    Console.WriteLine(
+                        "检测到蓝牙连接断开。");
 
-                    DisposeConnection(connection);
-                    connection = await ReconnectAsync();
+                    Console.WriteLine(
+                        "准备自动重新连接...");
+
+                    await _bluetoothService
+                        .DisconnectAsync();
+
+                    await ReconnectAsync();
 
                     if (_shutdownRequested)
                         break;
@@ -91,27 +97,44 @@ internal class Program
                 }
 
                 await WaitForNextSyncAsync(
-                    TimeSpan.FromMinutes(SyncIntervalMinutes));
+                    TimeSpan.FromMinutes(
+                        SyncIntervalMinutes));
             }
         }
         catch (OperationCanceledException)
             when (_shutdownRequested)
         {
             Console.WriteLine();
-            Console.WriteLine("收到退出请求。");
+            Console.WriteLine(
+                "收到退出请求。");
         }
         catch (Exception ex)
         {
             Console.WriteLine();
-            Console.WriteLine("程序发生未处理异常：");
+            Console.WriteLine(
+                "程序发生未处理异常：");
+
             Console.WriteLine(ex);
         }
         finally
         {
-            DisposeConnection(connection);
+            if (_bluetoothService is not null)
+            {
+                try
+                {
+                    await _bluetoothService
+                        .DisconnectAsync();
+                }
+                catch
+                {
+                }
+
+                _bluetoothService = null;
+            }
 
             Console.WriteLine();
-            Console.WriteLine("BTTimeSync 已退出。");
+            Console.WriteLine(
+                "BTTimeSync 已退出。");
         }
     }
 
@@ -120,26 +143,36 @@ internal class Program
         ConsoleCancelEventArgs e)
     {
         e.Cancel = true;
+
         _shutdownRequested = true;
 
         Console.WriteLine();
-        Console.WriteLine("正在退出 BTTimeSync...");
+        Console.WriteLine(
+            "正在退出 BTTimeSync...");
     }
 
-    private static async Task<ConnectionContext>
-        ConnectAndHandshakeAsync()
+    private static async Task ConnectAndHandshakeAsync()
     {
+        if (_bluetoothService is null)
+        {
+            throw new InvalidOperationException(
+                "BluetoothService 尚未初始化。");
+        }
+
         while (!_shutdownRequested)
         {
             try
             {
-                return await ConnectAndHandshakeOnceAsync();
+                await ConnectAndHandshakeOnceAsync();
+
+                return;
             }
             catch (Exception ex)
                 when (IsConnectionException(ex))
             {
                 Console.WriteLine();
-                Console.WriteLine($"连接失败：{ex.Message}");
+                Console.WriteLine(
+                    $"连接失败：{ex.Message}");
 
                 if (_shutdownRequested)
                     break;
@@ -156,187 +189,73 @@ internal class Program
         throw new OperationCanceledException();
     }
 
-    private static async Task<ConnectionContext>
-        ConnectAndHandshakeOnceAsync()
+    private static async Task ConnectAndHandshakeOnceAsync()
     {
-        Console.WriteLine("正在搜索 BTTimeSync 蓝牙设备...");
+        if (_bluetoothService is null)
+        {
+            throw new InvalidOperationException(
+                "BluetoothService 尚未初始化。");
+        }
 
-        var selector =
-            BluetoothDevice.GetDeviceSelector();
+        Console.WriteLine(
+            "正在搜索 BTTimeSync 蓝牙设备...");
 
         var devices =
-            await DeviceInformation.FindAllAsync(selector);
+            await _bluetoothService
+                .DiscoverDevicesAsync();
 
-        BluetoothDevice? targetDevice = null;
-        RfcommDeviceService? targetService = null;
+        BTTimeSync.Common.Models.BluetoothDeviceInfo? targetDevice = null;
 
-        foreach (var deviceInformation in devices)
+        foreach (var device in devices)
         {
             if (_shutdownRequested)
                 throw new OperationCanceledException();
 
-            BluetoothDevice? bluetoothDevice = null;
+            var deviceName =
+                string.IsNullOrWhiteSpace(device.Name)
+                    ? "(未命名设备)"
+                    : device.Name;
 
-            try
-            {
-                bluetoothDevice =
-                    await BluetoothDevice.FromIdAsync(
-                        deviceInformation.Id);
+            Console.WriteLine(
+                $"发现设备：{deviceName}");
 
-                if (bluetoothDevice is null)
-                    continue;
+            if (!device.IsTimeSyncDevice)
+                continue;
 
-                var deviceName =
-                    bluetoothDevice.Name;
+            targetDevice = device;
 
-                if (string.IsNullOrWhiteSpace(deviceName))
-                    deviceName = deviceInformation.Name;
+            Console.WriteLine(
+                "发现 BTTimeSync RFCOMM 服务。");
 
-                Console.WriteLine(
-                    $"发现设备：{deviceName}");
-
-                var services =
-                    await bluetoothDevice
-                        .GetRfcommServicesForIdAsync(
-                            RfcommServiceId.FromUuid(
-                                AppConstants.BluetoothServiceUuid));
-
-                if (services.Services.Count == 0)
-                    continue;
-
-                targetDevice = bluetoothDevice;
-                targetService = services.Services[0];
-
-                Console.WriteLine(
-                    "发现 BTTimeSync RFCOMM 服务。");
-
-                break;
-            }
-            catch
-            {
-                bluetoothDevice?.Dispose();
-            }
+            break;
         }
 
-        if (targetDevice is null ||
-            targetService is null)
+        if (targetDevice is null)
         {
             throw new IOException(
                 "未找到 BTTimeSync RFCOMM 服务。");
         }
 
-        var socket =
-            new StreamSocket();
-
-        var writer =
-            new DataWriter(
-                socket.OutputStream)
-            {
-                ByteOrder = ByteOrder.BigEndian
-            };
-
-        var reader =
-            new DataReader(
-                socket.InputStream)
-            {
-                ByteOrder = ByteOrder.BigEndian,
-                InputStreamOptions =
-                    InputStreamOptions.Partial
-            };
-
-        try
-        {
-            await socket.ConnectAsync(
-                targetService.ConnectionHostName,
-                targetService.ConnectionServiceName);
-
-            Console.WriteLine(
-                "RFCOMM 连接成功。");
-
-            Console.WriteLine();
-
-            var connection =
-                new ConnectionContext
-                {
-                    Device = targetDevice,
-                    Service = targetService,
-                    Socket = socket,
-                    Reader = reader,
-                    Writer = writer
-                };
-
-            await PerformHandshakeAsync(connection);
-
-            return connection;
-        }
-        catch
-        {
-            reader.Dispose();
-            writer.Dispose();
-            socket.Dispose();
-            targetService.Dispose();
-            targetDevice.Dispose();
-
-            throw;
-        }
-    }
-
-    private static async Task PerformHandshakeAsync(
-        ConnectionContext connection)
-    {
-        var helloPayload =
-            Encoding.UTF8.GetBytes(
-                AppConstants.BluetoothServiceName);
-
-        var helloPacket =
-            new Packet
-            {
-                Version = 1,
-                Type = PacketType.Hello,
-                Payload = helloPayload
-            };
-
-        var encoded =
-            PacketWriter.Encode(
-                helloPacket);
-
-        connection.Writer.WriteBytes(
-            encoded);
-
-        await connection.Writer.StoreAsync();
-        await connection.Writer.FlushAsync();
+        await _bluetoothService.ConnectAsync(
+            targetDevice);
 
         Console.WriteLine(
-            "已发送 BTSP Hello。");
-
-        var response =
-            await ReceivePacketAsync(connection);
-
-        if (response.Version != 1)
-        {
-            throw new IOException(
-                $"HelloAck 协议版本错误：{response.Version}");
-        }
-
-        if (response.Type != PacketType.HelloAck)
-        {
-            throw new IOException(
-                $"HelloAck 类型错误：{response.Type}");
-        }
-
-        if (response.Payload.Length != 0)
-        {
-            throw new IOException(
-                "HelloAck Payload 长度错误。");
-        }
+            "RFCOMM 连接成功。");
 
         Console.WriteLine(
             "BTSP Hello/HelloAck 握手成功。");
+
+        Console.WriteLine();
     }
 
-    private static async Task<ConnectionContext>
-        ReconnectAsync()
+    private static async Task ReconnectAsync()
     {
+        if (_bluetoothService is null)
+        {
+            throw new InvalidOperationException(
+                "BluetoothService 尚未初始化。");
+        }
+
         var retrySeconds =
             ReconnectRetryIntervalSeconds;
 
@@ -348,8 +267,7 @@ internal class Program
                 Console.WriteLine(
                     "========== 自动重连 ==========");
 
-                var connection =
-                    await ConnectAndHandshakeOnceAsync();
+                await ConnectAndHandshakeOnceAsync();
 
                 Console.WriteLine(
                     "自动重连成功。");
@@ -357,7 +275,7 @@ internal class Program
                 Console.WriteLine(
                     "==============================");
 
-                return connection;
+                return;
             }
             catch (Exception ex)
                 when (IsConnectionException(ex))
@@ -371,7 +289,8 @@ internal class Program
 
                 if (!string.IsNullOrWhiteSpace(ex.Message))
                 {
-                    Console.WriteLine(ex.Message);
+                    Console.WriteLine(
+                        ex.Message);
                 }
 
                 if (_shutdownRequested)
@@ -381,7 +300,8 @@ internal class Program
                     $"{retrySeconds} 秒后再次尝试...");
 
                 await DelayWithShutdownAsync(
-                    TimeSpan.FromSeconds(retrySeconds));
+                    TimeSpan.FromSeconds(
+                        retrySeconds));
 
                 retrySeconds =
                     Math.Min(
@@ -395,7 +315,7 @@ internal class Program
 
     private static async Task<SyncCycleResult>
         RunSyncCycleAsync(
-            ConnectionContext connection)
+            ITimeSyncService timeSyncService)
     {
         Console.WriteLine();
         Console.WriteLine(
@@ -408,7 +328,7 @@ internal class Program
             "========================================");
 
         var results =
-            new List<SyncResult>();
+            new List<BTTimeSync.Common.SyncResult>();
 
         try
         {
@@ -425,7 +345,8 @@ internal class Program
                 }
 
                 var result =
-                    await SyncOnceAsync(connection);
+                    await timeSyncService
+                        .SyncOnceAsync();
 
                 results.Add(result);
 
@@ -544,21 +465,6 @@ internal class Program
         Console.WriteLine(
             $"最终 Offset    : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
 
-        /*
-         * 校时验证：
-         *
-         * 不能直接使用：
-         *
-         *     DateTimeOffset.UtcNow - theoreticalTargetTime
-         *
-         * 因为 SetSystemTime() 返回后，
-         * 程序自身执行也会消耗一定时间。
-         *
-         * 使用 Stopwatch 记录校时操作期间的
-         * 单调时间，避免把程序执行耗时误判为
-         * 校时误差。
-         */
-
         var verificationStopwatch =
             Stopwatch.StartNew();
 
@@ -576,28 +482,8 @@ internal class Program
         Console.WriteLine(
             "系统时间设置成功。");
 
-        /*
-         * SetSystemTime() 返回之后，
-         * 理论目标时间也应该继续向前流逝。
-         *
-         * 注意：
-         * Stopwatch 从调用 SetSystemTime() 前开始，
-         * 因此这里用它估计校时调用本身造成的时间流逝。
-         */
-
         var correctedTime =
             DateTimeOffset.UtcNow;
-
-        /*
-         * 为了避免把“读取 UtcNow 之前经过的时间”
-         * 计入误差，使用当前验证耗时作为补偿。
-         *
-         * 此处 Stopwatch 已经停止，因此不能再获得
-         * 后续代码耗时。
-         *
-         * 由于验证本身非常短，实际误差主要来自
-         * Windows 系统时间设置粒度及调度。
-         */
 
         var theoreticalCorrectedTime =
             theoreticalTargetTime.AddMilliseconds(
@@ -647,279 +533,6 @@ internal class Program
         };
     }
 
-    private static async Task<SyncResult>
-        SyncOnceAsync(
-            ConnectionContext connection)
-    {
-        var t1 =
-            DateTimeOffset.UtcNow
-                .ToUnixTimeMilliseconds();
-
-        var payload =
-            new byte[8];
-
-        System.Buffers.Binary.BinaryPrimitives
-            .WriteInt64BigEndian(
-                payload,
-                t1);
-
-        var packet =
-            new Packet
-            {
-                Version = 1,
-                Type = PacketType.RequestTime,
-                Payload = payload
-            };
-
-        var encoded =
-            PacketWriter.Encode(packet);
-
-        connection.Writer.WriteBytes(encoded);
-
-        await connection.Writer.StoreAsync();
-        await connection.Writer.FlushAsync();
-
-        var response =
-            await ReceivePacketAsync(connection);
-
-        var t4 =
-            DateTimeOffset.UtcNow
-                .ToUnixTimeMilliseconds();
-
-        if (response.Version != 1)
-        {
-            throw new IOException(
-                $"TimeResponse 协议版本错误：{response.Version}");
-        }
-
-        if (response.Type != PacketType.TimeResponse)
-        {
-            throw new IOException(
-                $"TimeResponse 类型错误：{response.Type}");
-        }
-
-        if (response.Payload.Length != 24)
-        {
-            throw new IOException(
-                $"TimeResponse Payload 长度错误：{response.Payload.Length}");
-        }
-
-        var responseT1 =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadInt64BigEndian(
-                    response.Payload.AsSpan(
-                        0,
-                        8));
-
-        var t2 =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadInt64BigEndian(
-                    response.Payload.AsSpan(
-                        8,
-                        8));
-
-        var t3 =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadInt64BigEndian(
-                    response.Payload.AsSpan(
-                        16,
-                        8));
-
-        if (responseT1 != t1)
-        {
-            throw new IOException(
-                "TimeResponse 中的 T1 与请求不一致。");
-        }
-
-        /*
-         * NTP-style 四时间戳算法：
-         *
-         * Delay =
-         *     (T4 - T1) - (T3 - T2)
-         *
-         * Offset =
-         *     ((T2 - T1) + (T3 - T4)) / 2
-         *
-         * Offset > 0：
-         *     远程设备时间领先本机。
-         */
-
-        var delay =
-            (t4 - t1) -
-            (t3 - t2);
-
-        var offset =
-            (
-                (t2 - t1) +
-                (t3 - t4)
-            ) / 2.0;
-
-        var remoteTime =
-            DateTimeOffset
-                .FromUnixTimeMilliseconds(t3);
-
-        var targetTime =
-            DateTimeOffset
-                .FromUnixTimeMilliseconds(t4)
-                .AddMilliseconds(offset);
-
-        return new SyncResult
-        {
-            Success = true,
-            RoundTripMilliseconds = delay,
-            OffsetMilliseconds = offset,
-            RemoteUnixMilliseconds = t3,
-            RemoteTime = remoteTime,
-            TargetTime = targetTime,
-            T1 = t1,
-            T2 = t2,
-            T3 = t3,
-            T4 = t4
-        };
-    }
-
-    private static async Task<Packet>
-        ReceivePacketAsync(
-            ConnectionContext connection)
-    {
-        const uint HeaderLength = 6;
-
-        var header =
-            await LoadExactlyAsync(
-                connection.Reader,
-                HeaderLength);
-
-        var startOfFrame =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadUInt16BigEndian(
-                    header.AsSpan(
-                        0,
-                        2));
-
-        if (startOfFrame != Packet.StartOfFrame)
-        {
-            throw new IOException(
-                $"无效的 BTSP SOF：0x{startOfFrame:X4}");
-        }
-
-        var payloadLength =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadUInt16BigEndian(
-                    header.AsSpan(
-                        4,
-                        2));
-
-        /*
-         * Payload 后面还有 2 字节 CRC16。
-         */
-
-        var remainingLength =
-            (uint)payloadLength + 2u;
-
-        var remaining =
-            await LoadExactlyAsync(
-                connection.Reader,
-                remainingLength);
-
-        var packetData =
-            new byte[
-                checked(
-                    (int)HeaderLength +
-                    (int)remainingLength)];
-
-        System.Buffer.BlockCopy(
-            header,
-            0,
-            packetData,
-            0,
-            (int)HeaderLength);
-
-        System.Buffer.BlockCopy(
-            remaining,
-            0,
-            packetData,
-            (int)HeaderLength,
-            (int)remainingLength);
-
-        return PacketReader.Decode(packetData);
-    }
-
-    private static async Task<byte[]>
-        LoadExactlyAsync(
-            DataReader reader,
-            uint length)
-    {
-        if (length == 0)
-            return [];
-
-        var result =
-            new byte[
-                checked((int)length)];
-
-        var offset = 0;
-
-        while (offset < result.Length)
-        {
-            if (_shutdownRequested)
-                throw new OperationCanceledException();
-
-            var available =
-                reader.UnconsumedBufferLength;
-
-            if (available == 0)
-            {
-                var remaining =
-                    result.Length - offset;
-
-                var requestLength =
-                    (uint)Math.Min(
-                        remaining,
-                        uint.MaxValue);
-
-                var loaded =
-                    await reader.LoadAsync(
-                        requestLength);
-
-                if (loaded == 0)
-                {
-                    throw new IOException(
-                        "蓝牙连接已关闭。");
-                }
-
-                available =
-                    reader.UnconsumedBufferLength;
-            }
-
-            var toRead =
-                (int)Math.Min(
-                    available,
-                    (uint)(result.Length - offset));
-
-            /*
-             * DataReader.ReadBytes() 必须把数据读取到
-             * 一个实际的 byte[] 中。
-             *
-             * 读取后再复制到 result。
-             */
-
-            var buffer =
-                new byte[toRead];
-
-            reader.ReadBytes(buffer);
-
-            System.Buffer.BlockCopy(
-                buffer,
-                0,
-                result,
-                offset,
-                toRead);
-
-            offset += toRead;
-        }
-
-        return result;
-    }
-
     private static void SetSystemTimeFromUnixMilliseconds(
         long unixMilliseconds)
     {
@@ -963,16 +576,6 @@ internal class Program
         }
     }
 
-    private static bool IsConnectionUsable(
-        ConnectionContext? connection)
-    {
-        return
-            connection is not null &&
-            connection.Socket is not null &&
-            connection.Writer is not null &&
-            connection.Reader is not null;
-    }
-
     private static bool IsConnectionException(
         Exception ex)
     {
@@ -998,17 +601,25 @@ internal class Program
                message.Contains("蓝牙") ||
                message.Contains("中止");
     }
+
     private static async Task WaitForNextSyncAsync(
         TimeSpan interval)
     {
-        var remaining = interval;
+        var remaining =
+            interval;
 
         Console.WriteLine();
-        Console.WriteLine("========================================");
+        Console.WriteLine(
+            "========================================");
+
         Console.WriteLine(
             $"下一次自动校时将在 {SyncIntervalMinutes} 分钟后进行。");
-        Console.WriteLine("按 Ctrl+C 可退出程序。");
-        Console.WriteLine("========================================");
+
+        Console.WriteLine(
+            "按 Ctrl+C 可退出程序。");
+
+        Console.WriteLine(
+            "========================================");
 
         while (remaining > TimeSpan.Zero &&
                !_shutdownRequested)
@@ -1018,14 +629,16 @@ internal class Program
                     ? $"{(int)remaining.TotalMinutes:D2}:{remaining.Seconds:D2}"
                     : $"00:{remaining.Seconds:D2}";
 
-            Console.Write($"\r距离下一次校时：{display}   ");
+            Console.Write(
+                $"\r距离下一次校时：{display}   ");
 
             var delay =
                 remaining > TimeSpan.FromSeconds(1)
                     ? TimeSpan.FromSeconds(1)
                     : remaining;
 
-            await DelayWithShutdownAsync(delay);
+            await DelayWithShutdownAsync(
+                delay);
 
             remaining -= delay;
         }
@@ -1034,9 +647,11 @@ internal class Program
         {
             Console.WriteLine();
             Console.WriteLine();
-            Console.WriteLine("到达校时周期，开始下一次自动校时...");
+            Console.WriteLine(
+                "到达校时周期，开始下一次自动校时...");
         }
     }
+
     private static async Task DelayWithShutdownAsync(
         TimeSpan delay)
     {
@@ -1056,78 +671,11 @@ internal class Program
                         StepMilliseconds)
                     : remaining;
 
-            await Task.Delay(currentDelay);
+            await Task.Delay(
+                currentDelay);
 
             remaining -= currentDelay;
         }
-    }
-
-    private static void DisposeConnection(
-        ConnectionContext? connection)
-    {
-        if (connection is null)
-            return;
-
-        try
-        {
-            connection.Reader.Dispose();
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            connection.Writer.DetachStream();
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            connection.Writer.Dispose();
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            connection.Socket.Dispose();
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            connection.Service.Dispose();
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            connection.Device.Dispose();
-        }
-        catch
-        {
-        }
-    }
-
-    private sealed class ConnectionContext
-    {
-        public BluetoothDevice Device { get; init; } = null!;
-
-        public RfcommDeviceService Service { get; init; } = null!;
-
-        public StreamSocket Socket { get; init; } = null!;
-
-        public DataReader Reader { get; init; } = null!;
-
-        public DataWriter Writer { get; init; } = null!;
     }
 
     private sealed class SyncCycleResult

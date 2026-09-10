@@ -3,6 +3,7 @@ using BTTimeSync.Bluetooth.Models;
 using BTTimeSync.Common;
 using BTTimeSync.Common.Models;
 using BTTimeSync.Core.Protocol;
+using System.Text;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Rfcomm;
 using Windows.Devices.Enumeration;
@@ -18,62 +19,57 @@ public sealed class BluetoothService : IBluetoothService
 {
     private BluetoothConnection? _connection;
 
-    /// <summary>
-    /// 当前是否已连接。
-    /// </summary>
     public bool IsConnected => _connection is not null;
 
-    /// <summary>
-    /// 扫描蓝牙设备。
-    /// </summary>
     public async Task<IReadOnlyList<BluetoothDeviceInfo>> DiscoverDevicesAsync(
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         var selector = BluetoothDevice.GetDeviceSelector();
-        var devices = await DeviceInformation.FindAllAsync(selector);
 
-        var result = new List<BluetoothDeviceInfo>();
+        var devices =
+            await DeviceInformation.FindAllAsync(selector);
+
+        var result =
+            new List<BluetoothDeviceInfo>();
 
         foreach (var device in devices)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             using var bluetoothDevice =
-                await BluetoothDevice.FromIdAsync(device.Id);
+                await BluetoothDevice.FromIdAsync(
+                    device.Id);
 
             if (bluetoothDevice is null)
-            {
                 continue;
-            }
 
             var rfcommResult =
                 await bluetoothDevice.GetRfcommServicesAsync();
 
-            var isTimeSyncDevice = rfcommResult.Services.Any(
-                service =>
-                    service.ServiceId.Uuid ==
-                    AppConstants.BluetoothServiceUuid);
+            var isTimeSyncDevice =
+                rfcommResult.Services.Any(
+                    service =>
+                        service.ServiceId.Uuid ==
+                        AppConstants.BluetoothServiceUuid);
 
-            result.Add(new BluetoothDeviceInfo
-            {
-                DeviceId = device.Id,
-                Name = bluetoothDevice.Name,
-                Address = FormatBluetoothAddress(
-                    bluetoothDevice.BluetoothAddress),
-                IsPaired = device.Pairing.IsPaired,
-                IsTimeSyncDevice = isTimeSyncDevice,
-                LastSeenUtc = DateTime.UtcNow
-            });
+            result.Add(
+                new BluetoothDeviceInfo
+                {
+                    DeviceId = device.Id,
+                    Name = bluetoothDevice.Name,
+                    Address = FormatBluetoothAddress(
+                        bluetoothDevice.BluetoothAddress),
+                    IsPaired = device.Pairing.IsPaired,
+                    IsTimeSyncDevice = isTimeSyncDevice,
+                    LastSeenUtc = DateTime.UtcNow
+                });
         }
 
         return result;
     }
 
-    /// <summary>
-    /// 获取指定蓝牙设备提供的 RFCOMM 服务。
-    /// </summary>
     public async Task<IReadOnlyList<BluetoothRfcommServiceInfo>>
         GetRfcommServicesAsync(
             BluetoothDeviceInfo deviceInfo,
@@ -82,33 +78,34 @@ public sealed class BluetoothService : IBluetoothService
         cancellationToken.ThrowIfCancellationRequested();
 
         using var bluetoothDevice =
-            await BluetoothDevice.FromIdAsync(deviceInfo.DeviceId);
+            await BluetoothDevice.FromIdAsync(
+                deviceInfo.DeviceId);
 
         if (bluetoothDevice is null)
-        {
             return Array.Empty<BluetoothRfcommServiceInfo>();
-        }
 
-        var result = await bluetoothDevice.GetRfcommServicesAsync();
+        var result =
+            await bluetoothDevice.GetRfcommServicesAsync();
 
-        var services = new List<BluetoothRfcommServiceInfo>();
+        var services =
+            new List<BluetoothRfcommServiceInfo>();
 
         foreach (var service in result.Services)
         {
-            services.Add(new BluetoothRfcommServiceInfo
-            {
-                ServiceUuid = service.ServiceId.Uuid,
-                ConnectionServiceName =
-                    service.ConnectionServiceName
-            });
+            services.Add(
+                new BluetoothRfcommServiceInfo
+                {
+                    ServiceUuid =
+                        service.ServiceId.Uuid,
+
+                    ConnectionServiceName =
+                        service.ConnectionServiceName
+                });
         }
 
         return services;
     }
 
-    /// <summary>
-    /// 连接指定的 BTTimeSync 蓝牙设备。
-    /// </summary>
     public async Task ConnectAsync(
         BluetoothDeviceInfo device,
         CancellationToken cancellationToken = default)
@@ -118,7 +115,8 @@ public sealed class BluetoothService : IBluetoothService
         await DisconnectAsync();
 
         using var bluetoothDevice =
-            await BluetoothDevice.FromIdAsync(device.DeviceId);
+            await BluetoothDevice.FromIdAsync(
+                device.DeviceId);
 
         if (bluetoothDevice is null)
         {
@@ -127,11 +125,13 @@ public sealed class BluetoothService : IBluetoothService
         }
 
         var serviceResult =
-            await bluetoothDevice.GetRfcommServicesForIdAsync(
-                RfcommServiceId.FromUuid(
-                    AppConstants.BluetoothServiceUuid));
+            await bluetoothDevice
+                .GetRfcommServicesForIdAsync(
+                    RfcommServiceId.FromUuid(
+                        AppConstants.BluetoothServiceUuid));
 
-        var service = serviceResult.Services.FirstOrDefault();
+        var service =
+            serviceResult.Services.FirstOrDefault();
 
         if (service is null)
         {
@@ -139,158 +139,289 @@ public sealed class BluetoothService : IBluetoothService
                 "目标设备未提供 BTTimeSync RFCOMM 服务。");
         }
 
-        var socket = new StreamSocket();
+        var socket =
+            new StreamSocket();
 
-        await socket.ConnectAsync(
-            service.ConnectionHostName,
-            service.ConnectionServiceName);
+        var reader =
+            new DataReader(
+                socket.InputStream)
+            {
+                ByteOrder = ByteOrder.BigEndian,
+                InputStreamOptions =
+                    InputStreamOptions.Partial
+            };
 
-        _connection = new BluetoothConnection
+        var writer =
+            new DataWriter(
+                socket.OutputStream)
+            {
+                ByteOrder = ByteOrder.BigEndian
+            };
+
+        try
         {
-            Device = device,
-            Socket = socket,
-            Reader = new DataReader(socket.InputStream),
-            Writer = new DataWriter(socket.OutputStream),
-            ConnectedAtUtc = DateTime.UtcNow
-        };
+            await socket.ConnectAsync(
+                service.ConnectionHostName,
+                service.ConnectionServiceName);
+
+            _connection =
+                new BluetoothConnection
+                {
+                    Device = device,
+                    Socket = socket,
+                    Reader = reader,
+                    Writer = writer,
+                    ConnectedAtUtc = DateTime.UtcNow
+                };
+
+            await PerformHandshakeAsync(
+                cancellationToken);
+
+            service.Dispose();
+        }
+        catch
+        {
+            reader.Dispose();
+            writer.Dispose();
+            socket.Dispose();
+            service.Dispose();
+            _connection = null;
+
+            throw;
+        }
     }
 
-    /// <summary>
-    /// 断开当前蓝牙连接。
-    /// </summary>
     public Task DisconnectAsync()
     {
         _connection?.Dispose();
+
         _connection = null;
 
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// 向当前连接的蓝牙设备发送 BTSP 数据包。
-    /// </summary>
+    private async Task PerformHandshakeAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var helloPayload =
+            Encoding.UTF8.GetBytes(
+                AppConstants.BluetoothServiceName);
+
+        var helloPacket =
+            new Packet
+            {
+                Version = 1,
+                Type = PacketType.Hello,
+                Payload = helloPayload
+            };
+
+        await SendPacketAsync(
+            helloPacket,
+            cancellationToken);
+
+        var response =
+            await ReceivePacketAsync(
+                cancellationToken);
+
+        if (response.Version != 1)
+        {
+            throw new IOException(
+                $"HelloAck 协议版本错误：{response.Version}");
+        }
+
+        if (response.Type != PacketType.HelloAck)
+        {
+            throw new IOException(
+                $"HelloAck 类型错误：{response.Type}");
+        }
+
+        if (response.Payload.Length != 0)
+        {
+            throw new IOException(
+                "HelloAck Payload 长度错误。");
+        }
+    }
+
+    public async Task SendBytesAsync(
+        byte[] data,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_connection is null)
+        {
+            throw new InvalidOperationException(
+                "当前没有已建立的蓝牙连接。");
+        }
+
+        _connection.Writer.WriteBytes(data);
+
+        await _connection.Writer.StoreAsync();
+
+        await _connection.Writer.FlushAsync();
+    }
+
+    public async Task<byte[]> ReceiveBytesAsync(
+        int length,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_connection is null)
+        {
+            throw new InvalidOperationException(
+                "当前没有已建立的蓝牙连接。");
+        }
+
+        if (length < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(length));
+        }
+
+        if (length == 0)
+            return [];
+
+        var result =
+            new byte[length];
+
+        var offset = 0;
+
+        while (offset < result.Length)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var available =
+                _connection.Reader.UnconsumedBufferLength;
+
+            if (available == 0)
+            {
+                var remaining =
+                    result.Length - offset;
+
+                var requestLength =
+                    (uint)Math.Min(
+                        remaining,
+                        uint.MaxValue);
+
+                var loaded =
+                    await _connection.Reader.LoadAsync(
+                        requestLength);
+
+                if (loaded == 0)
+                {
+                    throw new IOException(
+                        "蓝牙连接已关闭。");
+                }
+
+                available =
+                    _connection.Reader.UnconsumedBufferLength;
+            }
+
+            var toRead =
+                (int)Math.Min(
+                    available,
+                    (uint)(result.Length - offset));
+
+            var buffer =
+                new byte[toRead];
+
+            _connection.Reader.ReadBytes(buffer);
+
+            System.Buffer.BlockCopy(
+                buffer,
+                0,
+                result,
+                offset,
+                toRead);
+
+            offset += toRead;
+        }
+
+        return result;
+    }
+
     public async Task SendPacketAsync(
         Packet packet,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (_connection is null)
-        {
-            throw new InvalidOperationException(
-                "当前没有已建立的蓝牙连接。");
-        }
+        var data =
+            PacketWriter.Encode(packet);
 
-        var data = PacketWriter.Encode(packet);
-
-        _connection.Writer.WriteBytes(data);
-
-        await _connection.Writer.StoreAsync();
+        await SendBytesAsync(
+            data,
+            cancellationToken);
     }
 
-    /// <summary>
-    /// 从当前连接的蓝牙设备接收一个 BTSP 数据包。
-    /// </summary>
     public async Task<Packet> ReceivePacketAsync(
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (_connection is null)
+        const int headerLength = 6;
+
+        var header =
+            await ReceiveBytesAsync(
+                headerLength,
+                cancellationToken);
+
+        var startOfFrame =
+            System.Buffers.Binary.BinaryPrimitives
+                .ReadUInt16BigEndian(
+                    header.AsSpan(0, 2));
+
+        if (startOfFrame != Packet.StartOfFrame)
         {
-            throw new InvalidOperationException(
-                "当前没有已建立的蓝牙连接。");
+            throw new IOException(
+                $"无效的 BTSP SOF：0x{startOfFrame:X4}");
         }
 
-        var reader = _connection.Reader;
-
-        // BTSP 固定头：
-        // SOF 2 字节
-        // Version 1 字节
-        // Type 1 字节
-        // Length 2 字节
-        const uint headerLength = 6;
-
-        // 先读取固定头。
-        await LoadExactlyAsync(
-            reader,
-            headerLength,
-            cancellationToken);
-
-        var header = new byte[headerLength];
-        reader.ReadBytes(header);
-
-        // 从头部读取 Payload 长度。
         var payloadLength =
-            (header[4] << 8) |
-            header[5];
+            System.Buffers.Binary.BinaryPrimitives
+                .ReadUInt16BigEndian(
+                    header.AsSpan(4, 2));
 
-        // Payload + CRC16。
         var remainingLength =
-            (uint)payloadLength + 2;
+            checked(
+                (int)payloadLength + 2);
 
-        await LoadExactlyAsync(
-            reader,
-            remainingLength,
-            cancellationToken);
+        var remaining =
+            await ReceiveBytesAsync(
+                remainingLength,
+                cancellationToken);
 
-        var remaining = new byte[remainingLength];
-        reader.ReadBytes(remaining);
-
-        // 重新组合成完整 BTSP 数据包。
         var packetData =
-            new byte[header.Length + remaining.Length];
+            new byte[
+                checked(
+                    headerLength +
+                    remainingLength)];
 
         System.Buffer.BlockCopy(
             header,
             0,
             packetData,
             0,
-            header.Length);
+            headerLength);
 
         System.Buffer.BlockCopy(
             remaining,
             0,
             packetData,
-            header.Length,
-            remaining.Length);
+            headerLength,
+            remainingLength);
 
-        // 使用 Core 层统一完成协议解析和 CRC 校验。
         return PacketReader.Decode(packetData);
     }
 
-    /// <summary>
-    /// 确保 DataReader 至少加载指定数量的数据。
-    /// </summary>
-    private static async Task LoadExactlyAsync(
-        DataReader reader,
-        uint requiredLength,
-        CancellationToken cancellationToken)
+    private static string FormatBluetoothAddress(
+        ulong address)
     {
-        while (reader.UnconsumedBufferLength < requiredLength)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var missingLength =
-                requiredLength - reader.UnconsumedBufferLength;
-
-            var loadedLength =
-                await reader.LoadAsync(missingLength);
-
-            if (loadedLength == 0)
-            {
-                throw new InvalidOperationException(
-                    "蓝牙连接已关闭，未能读取完整的 BTSP 数据包。");
-            }
-        }
-    }
-
-    /// <summary>
-    /// 将蓝牙地址格式化为 XX:XX:XX:XX:XX:XX。
-    /// </summary>
-    private static string FormatBluetoothAddress(ulong address)
-    {
-        return address.ToString("X12")
+        return address
+            .ToString("X12")
             .Insert(2, ":")
             .Insert(5, ":")
             .Insert(8, ":")

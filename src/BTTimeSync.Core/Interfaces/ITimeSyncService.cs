@@ -1,5 +1,4 @@
-﻿using BTTimeSync.Common.Enums;
-using BTTimeSync.Common.Models;
+﻿using BTTimeSync.Common;
 
 namespace BTTimeSync.Core.Interfaces;
 
@@ -8,18 +7,6 @@ namespace BTTimeSync.Core.Interfaces;
 /// </summary>
 public interface ITimeSyncService
 {
-    /// <summary>
-    /// 当前同步状态。
-    /// </summary>
-    SyncStatus Status { get; }
-
-    /// <summary>
-    /// 执行一次时间同步。
-    /// </summary>
-    /// <param name="device">目标蓝牙设备。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>同步结果。</returns>
-    Task<SyncResult> SynchronizeAsync(
-        BluetoothDeviceInfo device,
+    Task<SyncResult> SyncOnceAsync(
         CancellationToken cancellationToken = default);
 }
