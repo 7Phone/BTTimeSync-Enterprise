@@ -1,8 +1,10 @@
 ﻿using BTTimeSync.Bluetooth.Interfaces;
 using BTTimeSync.Common.Models;
+using BTTimeSync.Console.Configuration;
 using BTTimeSync.Console.Infrastructure;
 using BTTimeSync.Core;
 using BTTimeSync.Core.Interfaces;
+
 using System.Diagnostics;
 using System.Net.Sockets;
 
@@ -17,28 +19,12 @@ namespace BTTimeSync.Console.Application;
 /// </remarks>
 public sealed class TimeSyncApplication
 {
-    private const int SampleCount = 10;
-
-    private const int SampleIntervalMilliseconds = 100;
-
-    private const int SyncIntervalMinutes = 30;
-
-    private const double VerificationThresholdMilliseconds = 50.0;
-
-    private const int ReconnectRetryIntervalSeconds = 5;
-
-    private const int ReconnectRetryIntervalMaximumSeconds = 30;
-
     private readonly IBluetoothService _bluetoothService;
-
     private readonly IBtspSession _btspSession;
-
     private readonly ITimeSyncService _timeSyncService;
-
     private readonly ITimeSyncSampler _timeSyncSampler;
-
     private readonly ISystemClock _systemClock;
-
+    private readonly AppConfig _config;
     private readonly CancellationToken _cancellationToken;
 
     public TimeSyncApplication(
@@ -47,6 +33,7 @@ public sealed class TimeSyncApplication
         ITimeSyncService timeSyncService,
         ITimeSyncSampler timeSyncSampler,
         ISystemClock systemClock,
+        AppConfig config,
         CancellationToken cancellationToken)
     {
         _bluetoothService =
@@ -73,6 +60,11 @@ public sealed class TimeSyncApplication
             systemClock ??
             throw new ArgumentNullException(
                 nameof(systemClock));
+
+        _config =
+            config ??
+            throw new ArgumentNullException(
+                nameof(config));
 
         _cancellationToken =
             cancellationToken;
@@ -126,7 +118,7 @@ public sealed class TimeSyncApplication
 
             await WaitForNextSyncAsync(
                 TimeSpan.FromMinutes(
-                    SyncIntervalMinutes));
+                    _config.TimeSync.SyncIntervalMinutes));
         }
     }
 
@@ -154,11 +146,11 @@ public sealed class TimeSyncApplication
                     break;
 
                 global::System.Console.WriteLine(
-                    $"将在 {ReconnectRetryIntervalSeconds} 秒后重试...");
+                    $"将在 {_config.TimeSync.ReconnectRetryIntervalSeconds} 秒后重试...");
 
                 await DelayWithCancellationAsync(
                     TimeSpan.FromSeconds(
-                        ReconnectRetryIntervalSeconds));
+                        _config.TimeSync.ReconnectRetryIntervalSeconds));
             }
         }
 
@@ -233,7 +225,7 @@ public sealed class TimeSyncApplication
     private async Task ReconnectAsync()
     {
         var retrySeconds =
-            ReconnectRetryIntervalSeconds;
+            _config.TimeSync.ReconnectRetryIntervalSeconds;
 
         while (!_cancellationToken.IsCancellationRequested)
         {
@@ -282,7 +274,8 @@ public sealed class TimeSyncApplication
                 retrySeconds =
                     Math.Min(
                         retrySeconds * 2,
-                        ReconnectRetryIntervalMaximumSeconds);
+                        _config.TimeSync
+                            .ReconnectRetryIntervalMaximumSeconds);
             }
         }
 
@@ -293,8 +286,7 @@ public sealed class TimeSyncApplication
     /// <summary>
     /// 执行一轮时间同步。
     /// </summary>
-    private async Task<SyncCycleResult>
-        RunSyncCycleAsync()
+    private async Task<SyncCycleResult> RunSyncCycleAsync()
     {
         global::System.Console.WriteLine();
         global::System.Console.WriteLine(
@@ -312,9 +304,10 @@ public sealed class TimeSyncApplication
         {
             sampleResult =
                 await _timeSyncSampler.CollectAsync(
-                    SampleCount,
+                    _config.TimeSync.SampleCount,
                     TimeSpan.FromMilliseconds(
-                        SampleIntervalMilliseconds),
+                        _config.TimeSync
+                            .SampleIntervalMilliseconds),
                     _cancellationToken);
         }
         catch (Exception ex)
@@ -342,8 +335,8 @@ public sealed class TimeSyncApplication
                 samples[i];
 
             global::System.Console.WriteLine(
-                $"样本 #{i + 1:00}  " +
-                $"Delay={result.RoundTripMilliseconds,6:F1} ms  " +
+                $"样本 #{i + 1:00} " +
+                $"Delay={result.RoundTripMilliseconds,6:F1} ms " +
                 $"Offset={result.OffsetMilliseconds,8:F1} ms");
         }
 
@@ -366,19 +359,19 @@ public sealed class TimeSyncApplication
             $"Median Offset : {statistics.Median:+0.00;-0.00;0.00} ms");
 
         global::System.Console.WriteLine(
-            $"MAD           : {statistics.Mad:F2} ms");
+            $"MAD : {statistics.Mad:F2} ms");
 
         global::System.Console.WriteLine(
-            $"Threshold     : ±{statistics.Threshold:F2} ms");
+            $"Threshold : ±{statistics.Threshold:F2} ms");
 
         global::System.Console.WriteLine(
-            $"正常样本       : {statistics.ValidIndexes.Count}");
+            $"正常样本 : {statistics.ValidIndexes.Count}");
 
         global::System.Console.WriteLine(
-            $"异常样本       : {statistics.OutlierIndexes.Count}");
+            $"异常样本 : {statistics.OutlierIndexes.Count}");
 
         global::System.Console.WriteLine(
-            $"Final Offset  : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
+            $"Final Offset : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
 
         var bestIndex =
             sampleResult.BestSampleIndex;
@@ -391,13 +384,13 @@ public sealed class TimeSyncApplication
             "---------- 最佳样本 ----------");
 
         global::System.Console.WriteLine(
-            $"样本编号       : #{bestIndex + 1:00}");
+            $"样本编号 : #{bestIndex + 1:00}");
 
         global::System.Console.WriteLine(
-            $"最佳 Delay     : {bestResult.RoundTripMilliseconds:F1} ms");
+            $"最佳 Delay : {bestResult.RoundTripMilliseconds:F1} ms");
 
         global::System.Console.WriteLine(
-            $"对应 Offset    : {bestResult.OffsetMilliseconds:+0.00;-0.00;0.00} ms");
+            $"对应 Offset : {bestResult.OffsetMilliseconds:+0.00;-0.00;0.00} ms");
 
         var targetUnixMilliseconds =
             sampleResult.TargetUnixMilliseconds;
@@ -407,16 +400,16 @@ public sealed class TimeSyncApplication
 
         global::System.Console.WriteLine();
         global::System.Console.WriteLine(
-            $"参考 T4       : {bestResult.T4}");
+            $"参考 T4 : {bestResult.T4}");
 
         global::System.Console.WriteLine(
-            $"远程 UTC      : {bestResult.RemoteTime:yyyy-MM-dd HH:mm:ss.fff}");
+            $"远程 UTC : {bestResult.RemoteTime:yyyy-MM-dd HH:mm:ss.fff}");
 
         global::System.Console.WriteLine(
-            $"目标 UTC      : {theoreticalTargetTime:yyyy-MM-dd HH:mm:ss.fff}");
+            $"目标 UTC : {theoreticalTargetTime:yyyy-MM-dd HH:mm:ss.fff}");
 
         global::System.Console.WriteLine(
-            $"最终 Offset    : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
+            $"最终 Offset : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
 
         var verificationStopwatch =
             Stopwatch.StartNew();
@@ -455,19 +448,20 @@ public sealed class TimeSyncApplication
                 ).TotalMilliseconds);
 
         global::System.Console.WriteLine(
-            $"校时后 UTC      : {correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
+            $"校时后 UTC : {correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
 
         global::System.Console.WriteLine(
-            $"理论目标 UTC    : {theoreticalCorrectedTime:yyyy-MM-dd HH:mm:ss.fff}");
+            $"理论目标 UTC : {theoreticalCorrectedTime:yyyy-MM-dd HH:mm:ss.fff}");
 
         global::System.Console.WriteLine(
-            $"验证耗时        : {elapsedAfterSetMilliseconds:F1} ms");
+            $"验证耗时 : {elapsedAfterSetMilliseconds:F1} ms");
 
         global::System.Console.WriteLine(
-            $"剩余误差        : {verificationError:F1} ms");
+            $"剩余误差 : {verificationError:F1} ms");
 
         if (verificationError <=
-            VerificationThresholdMilliseconds)
+            _config.TimeSync
+                .VerificationThresholdMilliseconds)
         {
             global::System.Console.WriteLine();
             global::System.Console.WriteLine(
@@ -505,7 +499,7 @@ public sealed class TimeSyncApplication
             "========================================");
 
         global::System.Console.WriteLine(
-            $"下一次自动校时将在 {SyncIntervalMinutes} 分钟后进行。");
+            $"下一次自动校时将在 {_config.TimeSync.SyncIntervalMinutes} 分钟后进行。");
 
         global::System.Console.WriteLine(
             "按 Ctrl+C 可退出程序。");
@@ -522,7 +516,7 @@ public sealed class TimeSyncApplication
                     : $"00:{remaining.Seconds:D2}";
 
             global::System.Console.Write(
-                $"\r距离下一次校时：{display}   ");
+                $"\r距离下一次校时：{display} ");
 
             var delay =
                 remaining > TimeSpan.FromSeconds(1)

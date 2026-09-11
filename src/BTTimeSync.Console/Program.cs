@@ -1,13 +1,30 @@
 ﻿using BTTimeSync.Bluetooth.Interfaces;
 using BTTimeSync.Bluetooth.Services;
 using BTTimeSync.Console.Application;
+using BTTimeSync.Console.Configuration;
 using BTTimeSync.Console.Infrastructure;
 using BTTimeSync.Core.Interfaces;
 using BTTimeSync.Core.Services;
+using Microsoft.Extensions.Configuration;
 using System.Text;
 
 internal class Program
 {
+    private static readonly IConfiguration Configuration =
+        new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile(
+                "appsettings.json",
+                optional: false,
+                reloadOnChange: false)
+            .Build();
+
+    private static readonly AppConfig AppConfig =
+        Configuration
+            .Get<AppConfig>()
+        ?? throw new InvalidOperationException(
+            "无法加载 appsettings.json 配置。");
+
     private static readonly CancellationTokenSource ShutdownCts = new();
 
     private static volatile bool _shutdownRequested;
@@ -61,6 +78,7 @@ internal class Program
                     timeSyncService,
                     timeSyncSampler,
                     systemClock,
+                    AppConfig,
                     ShutdownCts.Token);
 
             await application.RunAsync();
