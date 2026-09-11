@@ -4,4 +4,6 @@
   <Project Path="src/BTTimeSync.Console/BTTimeSync.Console.csproj" />
   <Project Path="src/BTTimeSync.Core/BTTimeSync.Core.csproj" />
   <Project Path="src/BTTimeSync.Server/BTTimeSync.Server.csproj" Id="138902e6-3e7d-40a8-888c-22d111cecd93" />
+  <Project Path="tests/BTTimeSync.Bluetooth.Tests/BTTimeSync.Bluetooth.Tests.csproj" Id="3eed2372-8064-45e7-aa4b-a87318e36d5f" />
+  <Project Path="tests/BTTimeSync.Core.Tests/BTTimeSync.Core.Tests.csproj" Id="1d6bf633-a095-4b27-a7c4-ba88fe429b5c" />
 </Solution>

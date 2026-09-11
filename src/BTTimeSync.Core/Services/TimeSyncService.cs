@@ -1,26 +1,31 @@
 ﻿using BTTimeSync.Common;
 using BTTimeSync.Core.Interfaces;
 using BTTimeSync.Core.Protocol;
+using System.Buffers.Binary;
 
 namespace BTTimeSync.Core.Services;
 
 /// <summary>
-/// 时间同步服务。
+/// 单次时间同步服务。
 /// </summary>
 public sealed class TimeSyncService : ITimeSyncService
 {
-    private readonly IByteTransport _transport;
+    private const byte ProtocolVersion = 1;
+    private const int RequestPayloadLength = 8;
+    private const int ResponsePayloadLength = 24;
 
-    public TimeSyncService(IByteTransport transport)
+    private readonly IPacketTransport _packetTransport;
+
+    public TimeSyncService(
+        IPacketTransport packetTransport)
     {
-        _transport =
-            transport ??
-            throw new ArgumentNullException(nameof(transport));
+        _packetTransport =
+            packetTransport ??
+            throw new ArgumentNullException(
+                nameof(packetTransport));
     }
 
-    /// <summary>
-    /// 执行一次时间同步。
-    /// </summary>
+    /// <inheritdoc />
     public async Task<SyncResult> SyncOnceAsync(
         CancellationToken cancellationToken = default)
     {
@@ -30,38 +35,103 @@ public sealed class TimeSyncService : ITimeSyncService
             DateTimeOffset.UtcNow
                 .ToUnixTimeMilliseconds();
 
-        var payload =
-            new byte[8];
+        var requestPayload =
+            new byte[RequestPayloadLength];
 
-        System.Buffers.Binary.BinaryPrimitives
-            .WriteInt64BigEndian(
-                payload,
-                t1);
+        BinaryPrimitives.WriteInt64BigEndian(
+            requestPayload,
+            t1);
 
-        var packet =
+        var requestPacket =
             new Packet
             {
-                Version = 1,
+                Version = ProtocolVersion,
                 Type = PacketType.RequestTime,
-                Payload = payload
+                Payload = requestPayload
             };
 
-        var encoded =
-            PacketWriter.Encode(packet);
-
-        await _transport.SendBytesAsync(
-            encoded,
+        await _packetTransport.SendPacketAsync(
+            requestPacket,
             cancellationToken);
 
         var response =
-            await ReceivePacketAsync(
+            await _packetTransport.ReceivePacketAsync(
                 cancellationToken);
 
         var t4 =
             DateTimeOffset.UtcNow
                 .ToUnixTimeMilliseconds();
 
-        if (response.Version != 1)
+        ValidateResponse(response);
+
+        var responseT1 =
+            BinaryPrimitives.ReadInt64BigEndian(
+                response.Payload.AsSpan(
+                    0,
+                    8));
+
+        var t2 =
+            BinaryPrimitives.ReadInt64BigEndian(
+                response.Payload.AsSpan(
+                    8,
+                    8));
+
+        var t3 =
+            BinaryPrimitives.ReadInt64BigEndian(
+                response.Payload.AsSpan(
+                    16,
+                    8));
+
+        if (responseT1 != t1)
+        {
+            throw new IOException(
+                "TimeResponse 中的 T1 与请求不一致。");
+        }
+
+        var roundTripMilliseconds =
+            (t4 - t1) -
+            (t3 - t2);
+
+        var offsetMilliseconds =
+            (
+                (t2 - t1) +
+                (t3 - t4)
+            ) / 2.0;
+
+        var remoteTime =
+            DateTimeOffset
+                .FromUnixTimeMilliseconds(t3);
+
+        var targetTime =
+            DateTimeOffset
+                .FromUnixTimeMilliseconds(t4)
+                .AddMilliseconds(
+                    offsetMilliseconds);
+
+        return new SyncResult
+        {
+            Success = true,
+            RoundTripMilliseconds =
+                roundTripMilliseconds,
+            OffsetMilliseconds =
+                offsetMilliseconds,
+            RemoteUnixMilliseconds =
+                t3,
+            RemoteTime =
+                remoteTime,
+            TargetTime =
+                targetTime,
+            T1 = t1,
+            T2 = t2,
+            T3 = t3,
+            T4 = t4
+        };
+    }
+
+    private static void ValidateResponse(
+        Packet response)
+    {
+        if (response.Version != ProtocolVersion)
         {
             throw new IOException(
                 $"TimeResponse 协议版本错误：{response.Version}");
@@ -73,138 +143,11 @@ public sealed class TimeSyncService : ITimeSyncService
                 $"TimeResponse 类型错误：{response.Type}");
         }
 
-        if (response.Payload.Length != 24)
+        if (response.Payload.Length !=
+            ResponsePayloadLength)
         {
             throw new IOException(
                 $"TimeResponse Payload 长度错误：{response.Payload.Length}");
         }
-
-        var responseT1 =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadInt64BigEndian(
-                    response.Payload.AsSpan(
-                        0,
-                        8));
-
-        var t2 =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadInt64BigEndian(
-                    response.Payload.AsSpan(
-                        8,
-                        8));
-
-        var t3 =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadInt64BigEndian(
-                    response.Payload.AsSpan(
-                        16,
-                        8));
-
-        if (responseT1 != t1)
-        {
-            throw new IOException(
-                "TimeResponse 中的 T1 与请求不一致。");
-        }
-
-        var delay =
-            (t4 - t1) -
-            (t3 - t2);
-
-        var offset =
-            (
-                (t2 - t1) +
-                (t3 - t4)
-            ) / 2.0;
-
-        var remoteTime =
-            DateTimeOffset
-                .FromUnixTimeMilliseconds(
-                    t3);
-
-        var targetTime =
-            DateTimeOffset
-                .FromUnixTimeMilliseconds(
-                    t4)
-                .AddMilliseconds(
-                    offset);
-
-        return new SyncResult
-        {
-            Success = true,
-            RoundTripMilliseconds = delay,
-            OffsetMilliseconds = offset,
-            RemoteUnixMilliseconds = t3,
-            RemoteTime = remoteTime,
-            TargetTime = targetTime,
-            T1 = t1,
-            T2 = t2,
-            T3 = t3,
-            T4 = t4
-        };
-    }
-
-    /// <summary>
-    /// 接收一个完整 BTSP 数据包。
-    /// </summary>
-    private async Task<Packet> ReceivePacketAsync(
-        CancellationToken cancellationToken)
-    {
-        const int HeaderLength = 6;
-
-        var header =
-            await _transport.ReceiveBytesAsync(
-                HeaderLength,
-                cancellationToken);
-
-        var startOfFrame =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadUInt16BigEndian(
-                    header.AsSpan(
-                        0,
-                        2));
-
-        if (startOfFrame != Packet.StartOfFrame)
-        {
-            throw new IOException(
-                $"无效的 BTSP SOF：0x{startOfFrame:X4}");
-        }
-
-        var payloadLength =
-            System.Buffers.Binary.BinaryPrimitives
-                .ReadUInt16BigEndian(
-                    header.AsSpan(
-                        4,
-                        2));
-
-        var remainingLength =
-            checked(
-                (int)payloadLength + 2);
-
-        var remaining =
-            await _transport.ReceiveBytesAsync(
-                remainingLength,
-                cancellationToken);
-
-        var packetData =
-            new byte[
-                checked(
-                    HeaderLength +
-                    remainingLength)];
-
-        System.Buffer.BlockCopy(
-            header,
-            0,
-            packetData,
-            0,
-            HeaderLength);
-
-        System.Buffer.BlockCopy(
-            remaining,
-            0,
-            packetData,
-            HeaderLength,
-            remainingLength);
-
-        return PacketReader.Decode(packetData);
     }
 }
