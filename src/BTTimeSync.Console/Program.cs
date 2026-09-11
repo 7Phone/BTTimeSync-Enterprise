@@ -6,28 +6,46 @@ using BTTimeSync.Console.Infrastructure;
 using BTTimeSync.Core.Interfaces;
 using BTTimeSync.Core.Services;
 using Microsoft.Extensions.Configuration;
+using System.Reflection;
 using System.Text;
 
 internal class Program
 {
     private static readonly IConfiguration Configuration =
-        new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile(
-                "appsettings.json",
-                optional: false,
-                reloadOnChange: false)
-            .Build();
+        BuildConfiguration();
 
     private static readonly AppConfig AppConfig =
         Configuration
             .Get<AppConfig>()
         ?? throw new InvalidOperationException(
-            "无法加载 appsettings.json 配置。");
+            "无法加载 BTTimeSync 内嵌配置。");
 
     private static readonly CancellationTokenSource ShutdownCts = new();
 
     private static volatile bool _shutdownRequested;
+
+    private static IConfiguration BuildConfiguration()
+    {
+        var assembly =
+            Assembly.GetExecutingAssembly();
+
+        const string resourceName =
+            "BTTimeSync.Console.appsettings.json";
+
+        using Stream? stream =
+            assembly.GetManifestResourceStream(
+                resourceName);
+
+        if (stream is null)
+        {
+            throw new InvalidOperationException(
+                $"找不到内嵌配置资源：{resourceName}");
+        }
+
+        return new ConfigurationBuilder()
+            .AddJsonStream(stream)
+            .Build();
+    }
 
     private static async Task Main()
     {
