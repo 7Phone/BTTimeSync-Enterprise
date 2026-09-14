@@ -13,3 +13,5 @@
 
 # Logs
 *.log
+# Release artifacts
+/artifacts/
