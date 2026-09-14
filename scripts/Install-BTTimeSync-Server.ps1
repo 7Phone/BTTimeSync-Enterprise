@@ -87,12 +87,15 @@ Copy-Item `
 Write-Host "[4/5] Creating scheduled task..." -ForegroundColor Yellow
 
 
+$CurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+
 schtasks.exe `
     /Create `
     /TN $TaskName `
     /TR "`"$TargetExe`"" `
     /SC ONSTART `
-    /RU SYSTEM `
+    /RU $CurrentUser `
     /RL HIGHEST `
     /F
 
