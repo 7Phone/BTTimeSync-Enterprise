@@ -90,21 +90,27 @@ Write-Host "[4/5] Creating scheduled task..." -ForegroundColor Yellow
 $CurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 
-schtasks.exe `
-    /Create `
-    /TN $TaskName `
-    /TR "`"$TargetExe`"" `
-    /SC ONSTART `
-    /RU $CurrentUser `
-    /RL HIGHEST `
-    /F
+$Action = New-ScheduledTaskAction `
+    -Execute $TargetExe `
+    -WorkingDirectory $InstallRoot
 
 
-if ($LASTEXITCODE -ne 0) {
+$Trigger = New-ScheduledTaskTrigger `
+    -AtStartup
 
-    throw "Failed to create scheduled task."
 
-}
+$Principal = New-ScheduledTaskPrincipal `
+    -UserId $CurrentUser `
+    -LogonType S4U `
+    -RunLevel Highest
+
+
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -Action $Action `
+    -Trigger $Trigger `
+    -Principal $Principal `
+    -Force | Out-Null
 
 
 # ------------------------------------------------------------
