@@ -10,12 +10,9 @@ $ErrorActionPreference = "Stop"
 $InstallRoot = "C:\Program Files\BTTimeSync\Console"
 
 
-$RepoRoot = Split-Path -Parent $PSScriptRoot
-
-
 $SourceDir = Join-Path `
-    $RepoRoot `
-    "artifacts\$Version\Console"
+    $PSScriptRoot `
+    "Console"
 
 
 $ExeName = "BTTimeSync.Console.exe"
