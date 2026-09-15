@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BTTimeSync.Notification/BTTimeSync.Notification.csproj" />
+  </Folder>
   <Project Path="src/BTTimeSync.Bluetooth/BTTimeSync.Bluetooth.csproj" />
   <Project Path="src/BTTimeSync.Common/BTTimeSync.Common.csproj" />
   <Project Path="src/BTTimeSync.Console/BTTimeSync.Console.csproj" />

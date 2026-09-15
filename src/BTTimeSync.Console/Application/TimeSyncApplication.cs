@@ -26,6 +26,7 @@ public sealed class TimeSyncApplication
     private readonly ISystemClock _systemClock;
     private readonly AppConfig _config;
     private readonly CancellationToken _cancellationToken;
+    private readonly SyncNotificationWriter _notificationWriter;
 
     public TimeSyncApplication(
         IBluetoothService bluetoothService,
@@ -68,6 +69,9 @@ public sealed class TimeSyncApplication
 
         _cancellationToken =
             cancellationToken;
+
+        _notificationWriter =
+            new SyncNotificationWriter();
     }
 
     /// <summary>
@@ -94,6 +98,11 @@ public sealed class TimeSyncApplication
 
             var syncResult =
                 await RunSyncCycleAsync();
+
+            var notificationData =
+                SyncNotificationMapper.Map(syncResult);
+
+            _notificationWriter.Write(notificationData);
 
             if (_cancellationToken.IsCancellationRequested)
                 break;
@@ -350,7 +359,9 @@ private async Task DelayStartupAsync()
             return new SyncCycleResult
             {
                 Success = false,
-                ConnectionLost = true
+                ConnectionLost = true,
+                SyncTime = DateTimeOffset.Now,
+                ErrorMessage = "蓝牙连接已断开。"
             };
         }
 
@@ -374,7 +385,10 @@ private async Task DelayStartupAsync()
         {
             return new SyncCycleResult
             {
-                Success = false
+                Success = false,
+                SyncTime = DateTimeOffset.Now,
+                SampleCount = 0,
+                ErrorMessage = "本次校时未采集到有效样本。"
             };
         }
 
@@ -500,7 +514,12 @@ private async Task DelayStartupAsync()
 
             return new SyncCycleResult
             {
-                Success = true
+                Success = true,
+                SyncTime = DateTimeOffset.Now,
+                FinalOffsetMilliseconds = statistics.FinalOffset,
+                BestDelayMilliseconds = bestResult.RoundTripMilliseconds,
+                SampleCount = samples.Count,
+                RemainingErrorMilliseconds = verificationError
             };
         }
 
@@ -511,7 +530,13 @@ private async Task DelayStartupAsync()
 
         return new SyncCycleResult
         {
-            Success = false
+            Success = false,
+            SyncTime = DateTimeOffset.Now,
+            FinalOffsetMilliseconds = statistics.FinalOffset,
+            BestDelayMilliseconds = bestResult.RoundTripMilliseconds,
+            SampleCount = samples.Count,
+            RemainingErrorMilliseconds = verificationError,
+            ErrorMessage = "校时完成，但剩余误差超过验证阈值。"
         };
     }
 
@@ -612,13 +637,14 @@ private async Task DelayStartupAsync()
                message.Contains("中止");
     }
 
-    /// <summary>
-    /// 单次校时周期结果。
-    /// </summary>
-    private sealed class SyncCycleResult
-    {
-        public bool Success { get; init; }
-
-        public bool ConnectionLost { get; init; }
-    }
 }
+
+
+
+
+
+
+
+
+
+
