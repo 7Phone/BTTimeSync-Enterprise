@@ -40,8 +40,9 @@ public sealed class BluetoothDiscovery : IBluetoothDiscovery
                 continue;
 
             var rfcommResult =
-                await bluetoothDevice
-                    .GetRfcommServicesAsync();
+    await bluetoothDevice
+        .GetRfcommServicesAsync(
+            BluetoothCacheMode.Uncached);
 
             try
             {

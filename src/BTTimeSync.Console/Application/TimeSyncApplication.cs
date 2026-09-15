@@ -74,10 +74,12 @@ public sealed class TimeSyncApplication
     /// 运行 BTTimeSync 主循环。
     /// </summary>
     public async Task RunAsync()
-    {
-        await ConnectAndHandshakeAsync();
+{
+    await DelayStartupAsync();
 
-        while (!_cancellationToken.IsCancellationRequested)
+    await ConnectAndHandshakeAsync();
+
+    while (!_cancellationToken.IsCancellationRequested)
         {
             if (!_bluetoothService.IsConnected)
             {
@@ -122,7 +124,35 @@ public sealed class TimeSyncApplication
         }
     }
 
-    /// <summary>
+   /// <summary>
+/// 程序启动延迟。
+/// 用于等待 Windows 蓝牙服务及 Server 服务完成初始化。
+/// </summary>
+private async Task DelayStartupAsync()
+{
+    const int startupDelaySeconds = 30;
+
+    global::System.Console.WriteLine();
+
+    global::System.Console.WriteLine(
+        $"等待系统初始化 {startupDelaySeconds} 秒...");
+
+    for (var i = startupDelaySeconds;
+         i > 0 &&
+         !_cancellationToken.IsCancellationRequested;
+         i--)
+    {
+        global::System.Console.Write(
+            $"\r剩余启动等待时间：{i:00} 秒 ");
+
+        await DelayWithCancellationAsync(
+            TimeSpan.FromSeconds(1));
+    }
+
+    global::System.Console.WriteLine();
+    global::System.Console.WriteLine();
+}
+ /// <summary>
     /// 初次连接并完成握手。
     /// </summary>
     private async Task ConnectAndHandshakeAsync()
@@ -465,7 +495,7 @@ public sealed class TimeSyncApplication
         {
             global::System.Console.WriteLine();
             global::System.Console.WriteLine(
-                "BTTimeSync v0.8.0 校时完成，" +
+                "BTTimeSync v1.0.1 校时完成，" +
                 "剩余误差在验证阈值以内。");
 
             return new SyncCycleResult
@@ -476,7 +506,7 @@ public sealed class TimeSyncApplication
 
         global::System.Console.WriteLine();
         global::System.Console.WriteLine(
-            "BTTimeSync v0.8.0 校时完成，" +
+            "BTTimeSync v1.0.1 校时完成，" +
             "但剩余误差超过验证阈值。");
 
         return new SyncCycleResult

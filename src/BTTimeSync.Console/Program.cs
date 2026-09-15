@@ -53,7 +53,7 @@ internal class Program
             Encoding.UTF8;
 
         Console.WriteLine(
-            "BTTimeSync v0.8.0");
+            "BTTimeSync v1.0.1");
 
         Console.WriteLine(
             "===============");
