@@ -1,10 +1,10 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace BTTimeSync.Console.Infrastructure;
+namespace BTTimeSync.Application.System;
 
 /// <summary>
-/// Windows 系统时钟实现。
+/// Windows ϵͳʱ��ʵ�֡�
 /// </summary>
 public sealed class WindowsSystemClock : ISystemClock
 {
@@ -64,7 +64,7 @@ public sealed class WindowsSystemClock : ISystemClock
         {
             throw new Win32Exception(
                 Marshal.GetLastWin32Error(),
-                "设置 Windows 系统时间失败。");
+                "���� Windows ϵͳʱ��ʧ�ܡ�");
         }
     }
 }

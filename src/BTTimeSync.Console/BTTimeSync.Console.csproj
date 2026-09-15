@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BTTimeSync.Bluetooth\BTTimeSync.Bluetooth.csproj" />
+    <ProjectReference Include="..\BTTimeSync.Application\BTTimeSync.Application.csproj" />
   </ItemGroup>
 
   <ItemGroup>

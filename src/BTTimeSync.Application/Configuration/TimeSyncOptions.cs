@@ -1,37 +1,37 @@
-ï»¿namespace BTTimeSync.Console.Configuration;
+namespace BTTimeSync.Application.Configuration;
 
 /// <summary>
-/// æ—¶é—´åŒæ­¥ç›¸å…³é…ç½®ã€‚
+/// Ê±¼äÍ¬²½Ïà¹ØÅäÖÃ¡£
 /// </summary>
 public sealed class TimeSyncOptions
 {
     /// <summary>
-    /// æ¯æ¬¡æ—¶é—´åŒæ­¥é‡‡é›†çš„æ ·æœ¬æ•°é‡ã€‚
+    /// Ã¿´ÎÊ±¼äÍ¬²½²É¼¯µÄÑù±¾ÊıÁ¿¡£
     /// </summary>
     public int SampleCount { get; set; } = 10;
 
     /// <summary>
-    /// ç›¸é‚»æ ·æœ¬ä¹‹é—´çš„é‡‡æ ·é—´éš”ï¼Œå•ä½ï¼šæ¯«ç§’ã€‚
+    /// ÏàÁÚÑù±¾Ö®¼äµÄ²ÉÑù¼ä¸ô£¬µ¥Î»£ººÁÃë¡£
     /// </summary>
     public int SampleIntervalMilliseconds { get; set; } = 100;
 
     /// <summary>
-    /// è‡ªåŠ¨åŒæ­¥é—´éš”ï¼Œå•ä½ï¼šåˆ†é’Ÿã€‚
+    /// ×Ô¶¯Í¬²½¼ä¸ô£¬µ¥Î»£º·ÖÖÓ¡£
     /// </summary>
     public int SyncIntervalMinutes { get; set; } = 30;
 
     /// <summary>
-    /// æ—¶é—´æ ¡å‡†åçš„éªŒè¯å…è®¸è¯¯å·®ï¼Œå•ä½ï¼šæ¯«ç§’ã€‚
+    /// Ê±¼äĞ£×¼ºóµÄÑéÖ¤ÔÊĞíÎó²î£¬µ¥Î»£ººÁÃë¡£
     /// </summary>
     public double VerificationThresholdMilliseconds { get; set; } = 50;
 
     /// <summary>
-    /// è“ç‰™é‡è¿åˆå§‹ç­‰å¾…æ—¶é—´ï¼Œå•ä½ï¼šç§’ã€‚
+    /// À¶ÑÀÖØÁ¬³õÊ¼µÈ´ıÊ±¼ä£¬µ¥Î»£ºÃë¡£
     /// </summary>
     public int ReconnectRetryIntervalSeconds { get; set; } = 5;
 
     /// <summary>
-    /// è“ç‰™é‡è¿ç­‰å¾…æ—¶é—´çš„æœ€å¤§å€¼ï¼Œå•ä½ï¼šç§’ã€‚
+    /// À¶ÑÀÖØÁ¬µÈ´ıÊ±¼äµÄ×î´óÖµ£¬µ¥Î»£ºÃë¡£
     /// </summary>
     public int ReconnectRetryIntervalMaximumSeconds { get; set; } = 30;
 }

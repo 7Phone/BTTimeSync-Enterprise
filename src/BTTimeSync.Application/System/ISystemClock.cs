@@ -1,12 +1,12 @@
-﻿namespace BTTimeSync.Console.Infrastructure;
+namespace BTTimeSync.Application.System;
 
 /// <summary>
-/// 系统时钟操作接口。
+/// ϵͳʱ�Ӳ����ӿڡ�
 /// </summary>
 public interface ISystemClock
 {
     /// <summary>
-    /// 设置系统 UTC 时间。
+    /// ����ϵͳ UTC ʱ�䡣
     /// </summary>
     void SetUtcTime(DateTimeOffset utcTime);
 }

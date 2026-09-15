@@ -1,12 +1,12 @@
-ï»¿namespace BTTimeSync.Console.Configuration;
+namespace BTTimeSync.Application.Configuration;
 
 /// <summary>
-/// BTTimeSync åº”ç”¨ç¨‹åºæ€»é…ç½®ã€‚
+/// BTTimeSync Ó¦ÓÃ³ÌĞò×ÜÅäÖÃ¡£
 /// </summary>
 public sealed class AppConfig
 {
     /// <summary>
-    /// æ—¶é—´åŒæ­¥ç›¸å…³é…ç½®ã€‚
+    /// Ê±¼äÍ¬²½Ïà¹ØÅäÖÃ¡£
     /// </summary>
     public TimeSyncOptions TimeSync { get; set; } = new();
 }

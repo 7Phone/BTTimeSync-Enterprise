@@ -1,10 +1,10 @@
-ï»¿using System.Text.Json;
+using System.Text.Json;
 using BTTimeSync.Common.Models;
 
-namespace BTTimeSync.Console.Application;
+namespace BTTimeSync.Application;
 
 /// <summary>
-/// BTTimeSync æ ¡æ—¶ç»“æœé€šçŸ¥æ•°æ®å†™å…¥å™¨ã€‚
+/// BTTimeSync Ğ£Ê±½á¹ûÍ¨ÖªÊı¾İĞ´ÈëÆ÷¡£
 /// </summary>
 public sealed class SyncNotificationWriter
 {
@@ -23,9 +23,9 @@ public sealed class SyncNotificationWriter
     };
 
     /// <summary>
-    /// å†™å…¥ä¸€æ¬¡æ ¡æ—¶ç»“æœã€‚
+    /// Ğ´ÈëÒ»´ÎĞ£Ê±½á¹û¡£
     /// </summary>
-    /// <param name="result">æ ¡æ—¶ç»“æœã€‚</param>
+    /// <param name="result">Ğ£Ê±½á¹û¡£</param>
     public void Write(SyncNotificationData result)
     {
         try
@@ -49,7 +49,7 @@ public sealed class SyncNotificationWriter
         catch (Exception ex)
         {
             global::System.Console.WriteLine(
-                $"é€šçŸ¥ç»“æœå†™å…¥å¤±è´¥ï¼š{ex.Message}");
+                $"Í¨Öª½á¹ûĞ´ÈëÊ§°Ü£º{ex.Message}");
         }
     }
 }

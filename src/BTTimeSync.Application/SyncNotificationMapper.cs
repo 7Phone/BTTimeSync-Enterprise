@@ -1,17 +1,17 @@
-ï»¿using BTTimeSync.Common.Models;
+using BTTimeSync.Common.Models;
 
-namespace BTTimeSync.Console.Application;
+namespace BTTimeSync.Application;
 
 /// <summary>
-/// å°†æ ¡æ—¶å‘¨æœŸç»“æœè½¬æ¢ä¸ºé€šçŸ¥æ•°æ®ã€‚
+/// ½«Ğ£Ê±ÖÜÆÚ½á¹û×ª»»ÎªÍ¨ÖªÊı¾İ¡£
 /// </summary>
 public static class SyncNotificationMapper
 {
     /// <summary>
-    /// å°†æ ¡æ—¶å‘¨æœŸç»“æœè½¬æ¢ä¸ºé€šçŸ¥æ•°æ®ã€‚
+    /// ½«Ğ£Ê±ÖÜÆÚ½á¹û×ª»»ÎªÍ¨ÖªÊı¾İ¡£
     /// </summary>
-    /// <param name="result">æ ¡æ—¶å‘¨æœŸç»“æœã€‚</param>
-    /// <returns>é€šçŸ¥æ•°æ®ã€‚</returns>
+    /// <param name="result">Ğ£Ê±ÖÜÆÚ½á¹û¡£</param>
+    /// <returns>Í¨ÖªÊı¾İ¡£</returns>
     public static SyncNotificationData Map(
         SyncCycleResult result)
     {

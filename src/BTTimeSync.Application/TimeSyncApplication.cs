@@ -1,21 +1,21 @@
-ï»¿using BTTimeSync.Bluetooth.Interfaces;
+using BTTimeSync.Bluetooth.Interfaces;
 using BTTimeSync.Common.Models;
-using BTTimeSync.Console.Configuration;
-using BTTimeSync.Console.Infrastructure;
+using BTTimeSync.Application.Configuration;
+using BTTimeSync.Application.System;
 using BTTimeSync.Core;
 using BTTimeSync.Core.Interfaces;
 
 using System.Diagnostics;
 using System.Net.Sockets;
 
-namespace BTTimeSync.Console.Application;
+namespace BTTimeSync.Application;
 
 /// <summary>
-/// BTTimeSync åº”ç”¨ç¨‹åºä¸»æµç¨‹ã€‚
+/// BTTimeSync Ó¦ÓÃ³ÌĞòÖ÷Á÷³Ì¡£
 /// </summary>
 /// <remarks>
-/// è´Ÿè´£åè°ƒè“ç‰™è¿æ¥ã€BTSP æ¡æ‰‹ã€æ—¶é—´åŒæ­¥ã€
-/// ç³»ç»Ÿæ—¶é—´è®¾ç½®ã€æ ¡æ—¶éªŒè¯ä»¥åŠè‡ªåŠ¨é‡è¿ã€‚
+/// ¸ºÔğĞ­µ÷À¶ÑÀÁ¬½Ó¡¢BTSP ÎÕÊÖ¡¢Ê±¼äÍ¬²½¡¢
+/// ÏµÍ³Ê±¼äÉèÖÃ¡¢Ğ£Ê±ÑéÖ¤ÒÔ¼°×Ô¶¯ÖØÁ¬¡£
 /// </remarks>
 public sealed class TimeSyncApplication
 {
@@ -75,7 +75,7 @@ public sealed class TimeSyncApplication
     }
 
     /// <summary>
-    /// è¿è¡Œ BTTimeSync ä¸»å¾ªç¯ã€‚
+    /// ÔËĞĞ BTTimeSync Ö÷Ñ­»·¡£
     /// </summary>
     public async Task RunAsync()
 {
@@ -111,10 +111,10 @@ public sealed class TimeSyncApplication
             {
                 global::System.Console.WriteLine();
                 global::System.Console.WriteLine(
-                    "æ£€æµ‹åˆ°è“ç‰™è¿æ¥æ–­å¼€ã€‚");
+                    "¼ì²âµ½À¶ÑÀÁ¬½Ó¶Ï¿ª¡£");
 
                 global::System.Console.WriteLine(
-                    "å‡†å¤‡è‡ªåŠ¨é‡æ–°è¿æ¥...");
+                    "×¼±¸×Ô¶¯ÖØĞÂÁ¬½Ó...");
 
                 await _bluetoothService
                     .DisconnectAsync();
@@ -134,8 +134,8 @@ public sealed class TimeSyncApplication
     }
 
    /// <summary>
-/// ç¨‹åºå¯åŠ¨å»¶è¿Ÿã€‚
-/// ç”¨äºç­‰å¾… Windows è“ç‰™æœåŠ¡åŠ Server æœåŠ¡å®Œæˆåˆå§‹åŒ–ã€‚
+/// ³ÌĞòÆô¶¯ÑÓ³Ù¡£
+/// ÓÃÓÚµÈ´ı Windows À¶ÑÀ·şÎñ¼° Server ·şÎñÍê³É³õÊ¼»¯¡£
 /// </summary>
 private async Task DelayStartupAsync()
 {
@@ -144,7 +144,7 @@ private async Task DelayStartupAsync()
     global::System.Console.WriteLine();
 
     global::System.Console.WriteLine(
-        $"ç­‰å¾…ç³»ç»Ÿåˆå§‹åŒ– {startupDelaySeconds} ç§’...");
+        $"µÈ´ıÏµÍ³³õÊ¼»¯ {startupDelaySeconds} Ãë...");
 
     for (var i = startupDelaySeconds;
          i > 0 &&
@@ -152,7 +152,7 @@ private async Task DelayStartupAsync()
          i--)
     {
         global::System.Console.Write(
-            $"\rå‰©ä½™å¯åŠ¨ç­‰å¾…æ—¶é—´ï¼š{i:00} ç§’ ");
+            $"\rÊ£ÓàÆô¶¯µÈ´ıÊ±¼ä£º{i:00} Ãë ");
 
         await DelayWithCancellationAsync(
             TimeSpan.FromSeconds(1));
@@ -162,7 +162,7 @@ private async Task DelayStartupAsync()
     global::System.Console.WriteLine();
 }
  /// <summary>
-    /// åˆæ¬¡è¿æ¥å¹¶å®Œæˆæ¡æ‰‹ã€‚
+    /// ³õ´ÎÁ¬½Ó²¢Íê³ÉÎÕÊÖ¡£
     /// </summary>
     private async Task ConnectAndHandshakeAsync()
     {
@@ -179,13 +179,13 @@ private async Task DelayStartupAsync()
             {
                 global::System.Console.WriteLine();
                 global::System.Console.WriteLine(
-                    $"è¿æ¥å¤±è´¥ï¼š{ex.Message}");
+                    $"Á¬½ÓÊ§°Ü£º{ex.Message}");
 
                 if (_cancellationToken.IsCancellationRequested)
                     break;
 
                 global::System.Console.WriteLine(
-                    $"å°†åœ¨ {_config.TimeSync.ReconnectRetryIntervalSeconds} ç§’åé‡è¯•...");
+                    $"½«ÔÚ {_config.TimeSync.ReconnectRetryIntervalSeconds} ÃëºóÖØÊÔ...");
 
                 await DelayWithCancellationAsync(
                     TimeSpan.FromSeconds(
@@ -198,12 +198,12 @@ private async Task DelayStartupAsync()
     }
 
     /// <summary>
-    /// æ‰§è¡Œä¸€æ¬¡è¿æ¥å’Œæ¡æ‰‹ã€‚
+    /// Ö´ĞĞÒ»´ÎÁ¬½ÓºÍÎÕÊÖ¡£
     /// </summary>
     private async Task ConnectAndHandshakeOnceAsync()
     {
         global::System.Console.WriteLine(
-            "æ­£åœ¨æœç´¢ BTTimeSync è“ç‰™è®¾å¤‡...");
+            "ÕıÔÚËÑË÷ BTTimeSync À¶ÑÀÉè±¸...");
 
         var devices =
             await _bluetoothService
@@ -219,11 +219,11 @@ private async Task DelayStartupAsync()
 
             var deviceName =
                 string.IsNullOrWhiteSpace(device.Name)
-                    ? "(æœªå‘½åè®¾å¤‡)"
+                    ? "(Î´ÃüÃûÉè±¸)"
                     : device.Name;
 
             global::System.Console.WriteLine(
-                $"å‘ç°è®¾å¤‡ï¼š{deviceName}");
+                $"·¢ÏÖÉè±¸£º{deviceName}");
 
             if (!device.IsTimeSyncDevice)
                 continue;
@@ -231,7 +231,7 @@ private async Task DelayStartupAsync()
             targetDevice = device;
 
             global::System.Console.WriteLine(
-                "å‘ç° BTTimeSync RFCOMM æœåŠ¡ã€‚");
+                "·¢ÏÖ BTTimeSync RFCOMM ·şÎñ¡£");
 
             break;
         }
@@ -239,7 +239,7 @@ private async Task DelayStartupAsync()
         if (targetDevice is null)
         {
             throw new IOException(
-                "æœªæ‰¾åˆ° BTTimeSync RFCOMM æœåŠ¡ã€‚");
+                "Î´ÕÒµ½ BTTimeSync RFCOMM ·şÎñ¡£");
         }
 
         await _bluetoothService.ConnectAsync(
@@ -247,19 +247,19 @@ private async Task DelayStartupAsync()
             _cancellationToken);
 
         global::System.Console.WriteLine(
-            "RFCOMM è¿æ¥æˆåŠŸã€‚");
+            "RFCOMM Á¬½Ó³É¹¦¡£");
 
         await _btspSession.HandshakeAsync(
             _cancellationToken);
 
         global::System.Console.WriteLine(
-            "BTSP Hello/HelloAck æ¡æ‰‹æˆåŠŸã€‚");
+            "BTSP Hello/HelloAck ÎÕÊÖ³É¹¦¡£");
 
         global::System.Console.WriteLine();
     }
 
     /// <summary>
-    /// è‡ªåŠ¨é‡è¿ã€‚
+    /// ×Ô¶¯ÖØÁ¬¡£
     /// </summary>
     private async Task ReconnectAsync()
     {
@@ -272,12 +272,12 @@ private async Task DelayStartupAsync()
             {
                 global::System.Console.WriteLine();
                 global::System.Console.WriteLine(
-                    "========== è‡ªåŠ¨é‡è¿ ==========");
+                    "========== ×Ô¶¯ÖØÁ¬ ==========");
 
                 await ConnectAndHandshakeOnceAsync();
 
                 global::System.Console.WriteLine(
-                    "è‡ªåŠ¨é‡è¿æˆåŠŸã€‚");
+                    "×Ô¶¯ÖØÁ¬³É¹¦¡£");
 
                 global::System.Console.WriteLine(
                     "==============================");
@@ -289,7 +289,7 @@ private async Task DelayStartupAsync()
             {
                 global::System.Console.WriteLine();
                 global::System.Console.WriteLine(
-                    $"è‡ªåŠ¨é‡è¿å¤±è´¥ï¼ˆ{ex.GetType().Name}ï¼‰ï¼š");
+                    $"×Ô¶¯ÖØÁ¬Ê§°Ü£¨{ex.GetType().Name}£©£º");
 
                 global::System.Console.WriteLine(
                     $"HResult: 0x{ex.HResult:X8}");
@@ -304,7 +304,7 @@ private async Task DelayStartupAsync()
                     break;
 
                 global::System.Console.WriteLine(
-                    $"{retrySeconds} ç§’åå†æ¬¡å°è¯•...");
+                    $"{retrySeconds} ÃëºóÔÙ´Î³¢ÊÔ...");
 
                 await DelayWithCancellationAsync(
                     TimeSpan.FromSeconds(
@@ -323,7 +323,7 @@ private async Task DelayStartupAsync()
     }
 
     /// <summary>
-    /// æ‰§è¡Œä¸€è½®æ—¶é—´åŒæ­¥ã€‚
+    /// Ö´ĞĞÒ»ÂÖÊ±¼äÍ¬²½¡£
     /// </summary>
     private async Task<SyncCycleResult> RunSyncCycleAsync()
     {
@@ -332,7 +332,7 @@ private async Task DelayStartupAsync()
             "========================================");
 
         global::System.Console.WriteLine(
-            $"å¼€å§‹æ—¶é—´åŒæ­¥ï¼š{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            $"¿ªÊ¼Ê±¼äÍ¬²½£º{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 
         global::System.Console.WriteLine(
             "========================================");
@@ -354,14 +354,14 @@ private async Task DelayStartupAsync()
         {
             global::System.Console.WriteLine();
             global::System.Console.WriteLine(
-                $"æ—¶é—´åŒæ­¥è¿‡ç¨‹ä¸­è¿æ¥æ–­å¼€ï¼š{ex.Message}");
+                $"Ê±¼äÍ¬²½¹ı³ÌÖĞÁ¬½Ó¶Ï¿ª£º{ex.Message}");
 
             return new SyncCycleResult
             {
                 Success = false,
                 ConnectionLost = true,
                 SyncTime = DateTimeOffset.Now,
-                ErrorMessage = "è“ç‰™è¿æ¥å·²æ–­å¼€ã€‚"
+                ErrorMessage = "À¶ÑÀÁ¬½ÓÒÑ¶Ï¿ª¡£"
             };
         }
 
@@ -376,7 +376,7 @@ private async Task DelayStartupAsync()
                 samples[i];
 
             global::System.Console.WriteLine(
-                $"æ ·æœ¬ #{i + 1:00} " +
+                $"Ñù±¾ #{i + 1:00} " +
                 $"Delay={result.RoundTripMilliseconds,6:F1} ms " +
                 $"Offset={result.OffsetMilliseconds,8:F1} ms");
         }
@@ -388,7 +388,7 @@ private async Task DelayStartupAsync()
                 Success = false,
                 SyncTime = DateTimeOffset.Now,
                 SampleCount = 0,
-                ErrorMessage = "æœ¬æ¬¡æ ¡æ—¶æœªé‡‡é›†åˆ°æœ‰æ•ˆæ ·æœ¬ã€‚"
+                ErrorMessage = "±¾´ÎĞ£Ê±Î´²É¼¯µ½ÓĞĞ§Ñù±¾¡£"
             };
         }
 
@@ -397,7 +397,7 @@ private async Task DelayStartupAsync()
 
         global::System.Console.WriteLine();
         global::System.Console.WriteLine(
-            "---------- ç»Ÿè®¡ç»“æœ ----------");
+            "---------- Í³¼Æ½á¹û ----------");
 
         global::System.Console.WriteLine(
             $"Median Offset : {statistics.Median:+0.00;-0.00;0.00} ms");
@@ -406,13 +406,13 @@ private async Task DelayStartupAsync()
             $"MAD : {statistics.Mad:F2} ms");
 
         global::System.Console.WriteLine(
-            $"Threshold : Â±{statistics.Threshold:F2} ms");
+            $"Threshold : ¡À{statistics.Threshold:F2} ms");
 
         global::System.Console.WriteLine(
-            $"æ­£å¸¸æ ·æœ¬ : {statistics.ValidIndexes.Count}");
+            $"Õı³£Ñù±¾ : {statistics.ValidIndexes.Count}");
 
         global::System.Console.WriteLine(
-            $"å¼‚å¸¸æ ·æœ¬ : {statistics.OutlierIndexes.Count}");
+            $"Òì³£Ñù±¾ : {statistics.OutlierIndexes.Count}");
 
         global::System.Console.WriteLine(
             $"Final Offset : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
@@ -425,16 +425,16 @@ private async Task DelayStartupAsync()
 
         global::System.Console.WriteLine();
         global::System.Console.WriteLine(
-            "---------- æœ€ä½³æ ·æœ¬ ----------");
+            "---------- ×î¼ÑÑù±¾ ----------");
 
         global::System.Console.WriteLine(
-            $"æ ·æœ¬ç¼–å· : #{bestIndex + 1:00}");
+            $"Ñù±¾±àºÅ : #{bestIndex + 1:00}");
 
         global::System.Console.WriteLine(
-            $"æœ€ä½³ Delay : {bestResult.RoundTripMilliseconds:F1} ms");
+            $"×î¼Ñ Delay : {bestResult.RoundTripMilliseconds:F1} ms");
 
         global::System.Console.WriteLine(
-            $"å¯¹åº” Offset : {bestResult.OffsetMilliseconds:+0.00;-0.00;0.00} ms");
+            $"¶ÔÓ¦ Offset : {bestResult.OffsetMilliseconds:+0.00;-0.00;0.00} ms");
 
         var targetUnixMilliseconds =
             sampleResult.TargetUnixMilliseconds;
@@ -444,16 +444,16 @@ private async Task DelayStartupAsync()
 
         global::System.Console.WriteLine();
         global::System.Console.WriteLine(
-            $"å‚è€ƒ T4 : {bestResult.T4}");
+            $"²Î¿¼ T4 : {bestResult.T4}");
 
         global::System.Console.WriteLine(
-            $"è¿œç¨‹ UTC : {bestResult.RemoteTime:yyyy-MM-dd HH:mm:ss.fff}");
+            $"Ô¶³Ì UTC : {bestResult.RemoteTime:yyyy-MM-dd HH:mm:ss.fff}");
 
         global::System.Console.WriteLine(
-            $"ç›®æ ‡ UTC : {theoreticalTargetTime:yyyy-MM-dd HH:mm:ss.fff}");
+            $"Ä¿±ê UTC : {theoreticalTargetTime:yyyy-MM-dd HH:mm:ss.fff}");
 
         global::System.Console.WriteLine(
-            $"æœ€ç»ˆ Offset : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
+            $"×îÖÕ Offset : {statistics.FinalOffset:+0.00;-0.00;0.00} ms");
 
         var verificationStopwatch =
             Stopwatch.StartNew();
@@ -475,7 +475,7 @@ private async Task DelayStartupAsync()
 
         global::System.Console.WriteLine();
         global::System.Console.WriteLine(
-            "ç³»ç»Ÿæ—¶é—´è®¾ç½®æˆåŠŸã€‚");
+            "ÏµÍ³Ê±¼äÉèÖÃ³É¹¦¡£");
 
         var correctedTime =
             DateTimeOffset.UtcNow;
@@ -492,16 +492,16 @@ private async Task DelayStartupAsync()
                 ).TotalMilliseconds);
 
         global::System.Console.WriteLine(
-            $"æ ¡æ—¶å UTC : {correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
+            $"Ğ£Ê±ºó UTC : {correctedTime:yyyy-MM-dd HH:mm:ss.fff}");
 
         global::System.Console.WriteLine(
-            $"ç†è®ºç›®æ ‡ UTC : {theoreticalCorrectedTime:yyyy-MM-dd HH:mm:ss.fff}");
+            $"ÀíÂÛÄ¿±ê UTC : {theoreticalCorrectedTime:yyyy-MM-dd HH:mm:ss.fff}");
 
         global::System.Console.WriteLine(
-            $"éªŒè¯è€—æ—¶ : {elapsedAfterSetMilliseconds:F1} ms");
+            $"ÑéÖ¤ºÄÊ± : {elapsedAfterSetMilliseconds:F1} ms");
 
         global::System.Console.WriteLine(
-            $"å‰©ä½™è¯¯å·® : {verificationError:F1} ms");
+            $"Ê£ÓàÎó²î : {verificationError:F1} ms");
 
         if (verificationError <=
             _config.TimeSync
@@ -509,8 +509,8 @@ private async Task DelayStartupAsync()
         {
             global::System.Console.WriteLine();
             global::System.Console.WriteLine(
-                "BTTimeSync v1.0.1 æ ¡æ—¶å®Œæˆï¼Œ" +
-                "å‰©ä½™è¯¯å·®åœ¨éªŒè¯é˜ˆå€¼ä»¥å†…ã€‚");
+                "BTTimeSync v1.1.0 Ğ£Ê±Íê³É£¬" +
+                "Ê£ÓàÎó²îÔÚÑéÖ¤ãĞÖµÒÔÄÚ¡£");
 
             return new SyncCycleResult
             {
@@ -525,8 +525,8 @@ private async Task DelayStartupAsync()
 
         global::System.Console.WriteLine();
         global::System.Console.WriteLine(
-            "BTTimeSync v1.0.1 æ ¡æ—¶å®Œæˆï¼Œ" +
-            "ä½†å‰©ä½™è¯¯å·®è¶…è¿‡éªŒè¯é˜ˆå€¼ã€‚");
+            "BTTimeSync v1.1.0 Ğ£Ê±Íê³É£¬" +
+            "µ«Ê£ÓàÎó²î³¬¹ıÑéÖ¤ãĞÖµ¡£");
 
         return new SyncCycleResult
         {
@@ -536,12 +536,12 @@ private async Task DelayStartupAsync()
             BestDelayMilliseconds = bestResult.RoundTripMilliseconds,
             SampleCount = samples.Count,
             RemainingErrorMilliseconds = verificationError,
-            ErrorMessage = "æ ¡æ—¶å®Œæˆï¼Œä½†å‰©ä½™è¯¯å·®è¶…è¿‡éªŒè¯é˜ˆå€¼ã€‚"
+            ErrorMessage = "Ğ£Ê±Íê³É£¬µ«Ê£ÓàÎó²î³¬¹ıÑéÖ¤ãĞÖµ¡£"
         };
     }
 
     /// <summary>
-    /// ç­‰å¾…ä¸‹ä¸€æ¬¡è‡ªåŠ¨æ ¡æ—¶ã€‚
+    /// µÈ´ıÏÂÒ»´Î×Ô¶¯Ğ£Ê±¡£
     /// </summary>
     private async Task WaitForNextSyncAsync(
         TimeSpan interval)
@@ -554,10 +554,10 @@ private async Task DelayStartupAsync()
             "========================================");
 
         global::System.Console.WriteLine(
-            $"ä¸‹ä¸€æ¬¡è‡ªåŠ¨æ ¡æ—¶å°†åœ¨ {_config.TimeSync.SyncIntervalMinutes} åˆ†é’Ÿåè¿›è¡Œã€‚");
+            $"ÏÂÒ»´Î×Ô¶¯Ğ£Ê±½«ÔÚ {_config.TimeSync.SyncIntervalMinutes} ·ÖÖÓºó½øĞĞ¡£");
 
         global::System.Console.WriteLine(
-            "æŒ‰ Ctrl+C å¯é€€å‡ºç¨‹åºã€‚");
+            "°´ Ctrl+C ¿ÉÍË³ö³ÌĞò¡£");
 
         global::System.Console.WriteLine(
             "========================================");
@@ -571,7 +571,7 @@ private async Task DelayStartupAsync()
                     : $"00:{remaining.Seconds:D2}";
 
             global::System.Console.Write(
-                $"\rè·ç¦»ä¸‹ä¸€æ¬¡æ ¡æ—¶ï¼š{display} ");
+                $"\r¾àÀëÏÂÒ»´ÎĞ£Ê±£º{display} ");
 
             var delay =
                 remaining > TimeSpan.FromSeconds(1)
@@ -590,12 +590,12 @@ private async Task DelayStartupAsync()
             global::System.Console.WriteLine();
 
             global::System.Console.WriteLine(
-                "åˆ°è¾¾æ ¡æ—¶å‘¨æœŸï¼Œå¼€å§‹ä¸‹ä¸€æ¬¡è‡ªåŠ¨æ ¡æ—¶...");
+                "µ½´ïĞ£Ê±ÖÜÆÚ£¬¿ªÊ¼ÏÂÒ»´Î×Ô¶¯Ğ£Ê±...");
         }
     }
 
     /// <summary>
-    /// å¸¦å–æ¶ˆä»¤ç‰Œçš„å»¶è¿Ÿã€‚
+    /// ´øÈ¡ÏûÁîÅÆµÄÑÓ³Ù¡£
     /// </summary>
     private async Task DelayWithCancellationAsync(
         TimeSpan delay)
@@ -609,7 +609,7 @@ private async Task DelayStartupAsync()
     }
 
     /// <summary>
-    /// åˆ¤æ–­å¼‚å¸¸æ˜¯å¦å±äºè¿æ¥ç±»å¼‚å¸¸ã€‚
+    /// ÅĞ¶ÏÒì³£ÊÇ·ñÊôÓÚÁ¬½ÓÀàÒì³£¡£
     /// </summary>
     private static bool IsConnectionException(
         Exception ex)
@@ -631,10 +631,10 @@ private async Task DelayStartupAsync()
                message.Contains("closed") ||
                message.Contains("disconnect") ||
                message.Contains("aborted") ||
-               message.Contains("è¿œç¨‹") ||
-               message.Contains("è¿æ¥") ||
-               message.Contains("è“ç‰™") ||
-               message.Contains("ä¸­æ­¢");
+               message.Contains("Ô¶³Ì") ||
+               message.Contains("Á¬½Ó") ||
+               message.Contains("À¶ÑÀ") ||
+               message.Contains("ÖĞÖ¹");
     }
 
 }

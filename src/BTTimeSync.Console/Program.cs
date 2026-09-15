@@ -1,8 +1,8 @@
-ï»¿using BTTimeSync.Bluetooth.Interfaces;
+using BTTimeSync.Bluetooth.Interfaces;
 using BTTimeSync.Bluetooth.Services;
-using BTTimeSync.Console.Application;
-using BTTimeSync.Console.Configuration;
-using BTTimeSync.Console.Infrastructure;
+using BTTimeSync.Application;
+using BTTimeSync.Application.Configuration;
+using BTTimeSync.Application.System;
 using BTTimeSync.Core.Interfaces;
 using BTTimeSync.Core.Services;
 using Microsoft.Extensions.Configuration;
@@ -18,7 +18,7 @@ internal class Program
         Configuration
             .Get<AppConfig>()
         ?? throw new InvalidOperationException(
-            "æ— æ³•åŠ è½½ BTTimeSync å†…åµŒé…ç½®ã€‚");
+            "ÎŞ·¨¼ÓÔØ BTTimeSync ÄÚÇ¶ÅäÖÃ¡£");
 
     private static readonly CancellationTokenSource ShutdownCts = new();
 
@@ -39,7 +39,7 @@ internal class Program
         if (stream is null)
         {
             throw new InvalidOperationException(
-                $"æ‰¾ä¸åˆ°å†…åµŒé…ç½®èµ„æºï¼š{resourceName}");
+                $"ÕÒ²»µ½ÄÚÇ¶ÅäÖÃ×ÊÔ´£º{resourceName}");
         }
 
         return new ConfigurationBuilder()
@@ -53,7 +53,7 @@ internal class Program
             Encoding.UTF8;
 
         Console.WriteLine(
-            "BTTimeSync v1.0.1");
+            "BTTimeSync v1.1.0");
 
         Console.WriteLine(
             "===============");
@@ -106,13 +106,13 @@ internal class Program
         {
             Console.WriteLine();
             Console.WriteLine(
-                "æ”¶åˆ°é€€å‡ºè¯·æ±‚ã€‚");
+                "ÊÕµ½ÍË³öÇëÇó¡£");
         }
         catch (Exception ex)
         {
             Console.WriteLine();
             Console.WriteLine(
-                "ç¨‹åºå‘ç”Ÿæœªå¤„ç†å¼‚å¸¸ï¼š");
+                "³ÌĞò·¢ÉúÎ´´¦ÀíÒì³££º");
 
             Console.WriteLine(ex);
         }
@@ -134,7 +134,7 @@ internal class Program
 
             Console.WriteLine();
             Console.WriteLine(
-                "BTTimeSync å·²é€€å‡ºã€‚");
+                "BTTimeSync ÒÑÍË³ö¡£");
         }
     }
 
@@ -156,6 +156,6 @@ internal class Program
 
         Console.WriteLine();
         Console.WriteLine(
-            "æ­£åœ¨é€€å‡º BTTimeSync...");
+            "ÕıÔÚÍË³ö BTTimeSync...");
     }
 }
