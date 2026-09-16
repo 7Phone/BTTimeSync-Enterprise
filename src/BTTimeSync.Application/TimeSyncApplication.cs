@@ -25,18 +25,17 @@ public sealed class TimeSyncApplication
     private readonly ITimeSyncSampler _timeSyncSampler;
     private readonly ISystemClock _systemClock;
     private readonly AppConfig _config;
-    private readonly CancellationToken _cancellationToken;
+    private CancellationToken _cancellationToken;
     private readonly SyncNotificationWriter _notificationWriter;
 
     public TimeSyncApplication(
-        IBluetoothService bluetoothService,
-        IBtspSession btspSession,
-        ITimeSyncService timeSyncService,
-        ITimeSyncSampler timeSyncSampler,
-        ISystemClock systemClock,
-        AppConfig config,
-        CancellationToken cancellationToken)
-    {
+    IBluetoothService bluetoothService,
+    IBtspSession btspSession,
+    ITimeSyncService timeSyncService,
+    ITimeSyncSampler timeSyncSampler,
+    ISystemClock systemClock,
+    AppConfig config)
+{
         _bluetoothService =
             bluetoothService ??
             throw new ArgumentNullException(
@@ -67,9 +66,6 @@ public sealed class TimeSyncApplication
             throw new ArgumentNullException(
                 nameof(config));
 
-        _cancellationToken =
-            cancellationToken;
-
         _notificationWriter =
             new SyncNotificationWriter();
     }
@@ -77,8 +73,11 @@ public sealed class TimeSyncApplication
     /// <summary>
     /// 运行 BTTimeSync 主循环。
     /// </summary>
-    public async Task RunAsync()
+   public async Task RunAsync(
+    CancellationToken cancellationToken)
 {
+    _cancellationToken = cancellationToken;
+
     await DelayStartupAsync();
 
     await ConnectAndHandshakeAsync();
@@ -638,13 +637,3 @@ private async Task DelayStartupAsync()
     }
 
 }
-
-
-
-
-
-
-
-
-
-

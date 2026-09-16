@@ -15,5 +15,8 @@
     <ProjectReference Include="..\BTTimeSync.Core\BTTimeSync.Core.csproj" />
     <ProjectReference Include="..\BTTimeSync.Common\BTTimeSync.Common.csproj" />
     <ProjectReference Include="..\BTTimeSync.Bluetooth\BTTimeSync.Bluetooth.csproj" />
+    <ProjectReference Include="..\BTTimeSync.Application\BTTimeSync.Application.csproj" />
+    <ProjectReference Include="..\BTTimeSync.Notification\BTTimeSync.Notification.csproj" />
   </ItemGroup>
+
 </Project>
