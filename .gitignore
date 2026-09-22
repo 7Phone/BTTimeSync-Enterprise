@@ -15,3 +15,6 @@
 *.log
 # Release artifacts
 /artifacts/
+
+# Publish output
+publish/
